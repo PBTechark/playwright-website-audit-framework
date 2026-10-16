@@ -1,0 +1,50 @@
+name,url,enabled,maxPages,maxDepth
+ashmanco,https://ashmanco.com/,false,1,1
+sonrisevb,https://sonrisevb.church/,false,20,2
+ila1248,https://ila1248.org/,false,20,1
+the-internet,https://the-internet.herokuapp.com/dynamic_loading, false,3,2
+Broken Images,https://the-internet.herokuapp.com/broken_images,true,1,1
+Status Codes,https://the-internet.herokuapp.com/status_codes,false,5,2
+Shifting Content,https://the-internet.herokuapp.com/shifting_content,false,4,2
+Floating Menu,https://the-internet.herokuapp.com/floating_menu, false,1,2
+Checkboxes,https://the-internet.herokuapp.com/checkboxes,false,1,1
+Dropdown,https://the-internet.herokuapp.com/dropdown,false,1,1
+Disappearing Elements,https://the-internet.herokuapp.com/disappearing_elements,false,1,1
+Dynamic Content,https://the-internet.herokuapp.com/dynamic_content,false,1,1
+Dynamic Controls,https://the-internet.herokuapp.com/dynamic_controls,false,1,1
+Drag and Drop,https://the-internet.herokuapp.com/drag_and_drop,false,1,1
+Entry Ad,https://the-internet.herokuapp.com/entry_ad,false,1,1
+Exit Intent,https://the-internet.herokuapp.com/exit_intent,false,1,1
+Download,https://the-internet.herokuapp.com/download,false,1,2
+context_menu, https://the-internet.herokuapp.com/context_menu,false,1,1
+JavaScript Alerts,https://the-internet.herokuapp.com/javascript_alerts,false,1,1
+Broken Layout,https://broken-workshop.dequelabs.com,false,1,1
+Add/Remove Alerts Elements,https://the-internet.herokuapp.com/add_remove_elements/,false,1,1
+Bad SSL,https://badssl.com/,false,50,2
+Slow Loading page,https://the-internet.herokuapp.com/dynamic_loading/2,false,3,2
+Infinite Loading,https://the-internet.herokuapp.com/dynamic_loading/1?utm_source=chatgpt.com,false,1,1
+File Upload Failure,https://the-internet.herokuapp.com/upload,false,1,1
+Broken Form Validations,https://demoqa.com/text-box,false,1,1
+Tags Rendering,https://www.w3schools.com/html/html_entities.asp,false,1,1
+Tags,https://newportnewshistory.org/locations/,false,1,1
+Visual Issues,https://www.arngren.net/,false,1,1
+Blurr Images,https://ceapoducomdev.wpenginepowered.com/our-team/,false,1,1
+Header Overlapping,http://nexgentitle.com/career-demo-page/,false,1,1
+fde customization,https://statt.com/solutions/fde/,false,1,1
+VideoNotDisplay,https://pimaheartandvascular.com/,false,1,1
+WhiteSpace,https://pimaheartandvascular.com/transparency-in-coverage-rule/,false,1,1
+VideoPlayIssue,https://usheartandvascular.com/,false,1,1
+Invalid YouTube embed,https://www.youtube.com/embed/11111111111,false,1,1
+Invalid Vimeo embed & video not found issue,https://player.vimeo.com/video/999999999999999,false,1,1
+Invalid Wistia embed Embed fails,https://fast.wistia.net/embed/iframe/invalidvideoid,false,1,1
+Video 404/Not Found,https://example.com/video.mp4,false,1,1
+Invalid Media DNS Failure,https://invalid.invalid/movie.mp4,false,1,1
+Missing File,https://interactive-examples.mdn.mozilla.net/media/examples/notfound.mp4,false,1,1
+Unsupported Format issue,https://example.com/video.xyz,false,1,1
+corrupted source,https://example.com/index.html,false,1,1
+leesfriendsaboutus,https://leesfriends.org/about-us/,false,1,1
+smiva projects,https://www.smiva.com/projects/,false,1,1
+influencehairstaging,https://influancehair.wpenginepowered.com/,false,1,1
+influencehairimageremove,https://influancehair.wpenginepowered.com/from-the-ceo/,false,1,1
+checkboxalignment,https://mltcom.com/,false,1,1
+urology homepage Audit,https://urology.tekark.com/,false,1,1 

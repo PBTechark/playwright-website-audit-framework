@@ -1,0 +1,14 @@
+node_modules/
+dist/
+reports/
+screenshots/
+traces/
+logs/
+allure-results/
+allure-report/
+.env
+.env.*
+!.env.example
+test-results/
+playwright-report/
+test-data/page-inventory.json

@@ -1,0 +1,88 @@
+name: Website Audit
+
+on:
+  workflow_dispatch:
+  pull_request:
+  schedule:
+    - cron: '0 2 * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      MAX_PAGES: ${{ vars.MAX_PAGES || '75' }}
+      TARGETS_CSV: ${{ (github.event_name == 'pull_request') && 'test-data/audit-targets-pr.csv' || 'test-data/audit-targets.csv' }}
+      AUDIT_WORKERS: '2'
+      AUDIT_FAIL_ON_SEVERITY: ${{ vars.AUDIT_FAIL_ON_SEVERITY || 'Medium' }}
+      GLOBAL_TIMEOUT_MS: ${{ vars.GLOBAL_TIMEOUT_MS || '10800000' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps
+
+      - name: Build
+        run: npm run build
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Run website audit
+        run: npm run audit
+
+      - name: Add audit summary
+        if: always()
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const reportPath = 'reports/website-audit-report.json';
+          let summary = '## Website audit\n\n';
+
+          if (!fs.existsSync(reportPath)) {
+            summary += 'The custom report was not generated. Check the earlier workflow steps for the failure.\n';
+          } else {
+            const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
+            const counts = report.summary || {};
+            summary += `- Targets: ${counts.targets ?? 0}\n`;
+            summary += `- Pages crawled: ${counts.pagesCrawled ?? 0}\n`;
+            summary += `- Total findings: ${counts.totalIssues ?? 0}\n`;
+            summary += `- Critical / High / Medium / Low: ${counts.criticalIssues ?? 0} / ${counts.highIssues ?? 0} / ${counts.mediumIssues ?? 0} / ${counts.lowIssues ?? 0}\n`;
+            summary += '\nDownload the `website-audit-reports` artifact below for the custom HTML reports and evidence.\n';
+          }
+
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
+          NODE
+
+      - name: Upload custom audit reports and evidence
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: website-audit-reports
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            reports/website-audit-report.html
+            reports/website-audit-report.json
+            reports/website-audit-report.xls
+            reports/batch-summary.html
+            reports/*-report.html
+            reports/*/
+            reports/history
+            reports/raw-results
+            screenshots
+            traces
+            logs

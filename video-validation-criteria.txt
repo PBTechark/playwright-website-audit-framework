@@ -1,0 +1,71 @@
+Video validation issue detection criteria
+
+Native video player checks:
+1. Video source presence
+   - Fails if the visible video element has no src, currentSrc, or <source> candidate.
+
+2. Video hidden by CSS
+   - Fails if the player is user-facing but not visually rendered (zero size, display:none, invisible, etc.).
+
+3. Video clipped or partially hidden
+   - Fails if the visible video area is clipped or partially outside the viewport.
+
+4. Broken Video URL
+   - Fails when the video source URL returns a non-success HTTP status (404/500/etc.).
+
+5. Incorrect Video MIME Type
+   - Fails when the source responds with a non-video MIME type.
+
+6. Browser codec unsupported
+   - Fails when the browser reports the supplied video format is not playable.
+
+7. CORS Playback Failure
+   - Fails when browser security blocks media loading due to cross-origin/CORS issues.
+
+8. Play Button Disabled
+   - Fails when a visible play control exists but is disabled.
+
+9. Controls Not Available
+   - Fails when a visible video has no native controls, no visible custom play button, and does not autoplay.
+
+10. Autoplay Blocked / Play Button Not Responding / Video Never Starts
+    - Fails when playback is attempted but currentTime does not advance.
+
+11. Video Stalled During Playback
+    - Fails when playback starts but then stops advancing during observation.
+
+12. Black Video Frame
+    - Fails when the video area remains mostly black after playback begins.
+
+13. Audio Plays But Video Is Frozen
+    - Fails when audio progresses but visible frames do not change.
+
+14. Controls Disappear
+    - Fails when native controls vanish after playback starts.
+
+15. Infinite Loading Spinner
+    - Fails when a loading indicator stays visible and the video does not become playable.
+
+16. Poster Image Stuck
+    - Fails when a poster/thumbnail overlay remains visible after playback is requested.
+
+Embedded video checks:
+1. Embedded video source presence
+   - Fails if the iframe has no valid YouTube/Vimeo source URL.
+
+2. Video hidden by CSS
+   - Fails if the embedded iframe is hidden or has no visible size.
+
+3. Video clipped or partially hidden
+   - Fails if the embedded player is cut off or outside the viewport.
+
+4. Embedded Video Failed To Load
+   - Fails if the iframe source URL returns HTTP 4xx/5xx.
+
+5. Embedded Video Failed To Load (security/blocking)
+   - Fails if browser security or provider restrictions block the embedded player.
+
+Severity guidance:
+- Most video failures are classified as High.
+- Layout/visibility clipping issues are typically Medium.
+- Source absence and playback failures are treated as High or Critical depending on context.

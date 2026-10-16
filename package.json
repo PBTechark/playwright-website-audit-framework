@@ -1,0 +1,37 @@
+{
+  "name": "playwright-website-audit-framework",
+  "version": "1.0.0",
+  "description": "Production-ready Playwright and TypeScript website audit framework for visual, responsive, accessibility, SEO, performance, and technical checks.",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "audit": "playwright test --config=playwright.config.ts",
+    "audit:open": "npm run audit && npm run show-report",
+    "build": "tsc -p tsconfig.json",
+    "lint": "eslint . --ext .ts",
+    "format": "prettier --write .",
+    "clean": "node -e \"require('fs').rmSync('reports',{recursive:true,force:true});require('fs').rmSync('screenshots',{recursive:true,force:true});require('fs').rmSync('traces',{recursive:true,force:true});require('fs').rmSync('logs',{recursive:true,force:true});\"",
+    "show-report": "node -e \"const { spawn } = require('child_process'); const file = 'reports/website-audit-report.html'; const platform = process.platform; if (platform === 'darwin') { spawn('open', [file], { stdio: 'ignore', detached: true }).unref(); } else if (platform === 'win32') { spawn('cmd', ['/c', 'start', '', file], { stdio: 'ignore', detached: true }).unref(); } else { spawn('xdg-open', [file], { stdio: 'ignore', detached: true }).unref(); }\""
+  },
+  "dependencies": {
+    "@axe-core/playwright": "latest",
+    "axe-core": "latest",
+    "csv-parse": "^6.2.1",
+    "dotenv": "latest",
+    "fast-xml-parser": "latest",
+    "sanitize-filename": "latest"
+  },
+  "devDependencies": {
+    "@playwright/test": "latest",
+    "@types/node": "latest",
+    "@typescript-eslint/eslint-plugin": "latest",
+    "@typescript-eslint/parser": "latest",
+    "allure-playwright": "latest",
+    "eslint": "latest",
+    "prettier": "latest",
+    "typescript": "latest"
+  },
+  "engines": {
+    "node": ">=18.18.0"
+  }
+}
