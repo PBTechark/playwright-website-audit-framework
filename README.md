@@ -201,11 +201,15 @@ For every target, the framework stays on the same domain, removes duplicate URLs
 
 ## CI/CD
 
-The GitHub Actions workflow runs on pull requests, manual dispatch, and a nightly schedule. Pull requests read `test-data/audit-targets-pr.csv`; scheduled and manual runs read `test-data/audit-targets.csv`. Both CSVs must contain at least one enabled, approved target or setup fails with a clear error. The supplied target list is intentionally disabled until you choose which sites to audit.
+The GitHub Actions workflow runs on pull requests, manual dispatch, and a nightly schedule. Pull requests read `test-data/audit-targets-pr.csv`; scheduled and manual runs read `test-data/audit-targets.csv`. Both CSVs must contain at least one enabled, approved target or setup fails with a clear error.
 
-Each run uploads a `website-audit-reports` artifact containing the custom combined and per-site HTML reports, JSON/XLS summaries, raw results, history, screenshots, traces, and logs. The generic Playwright HTML report is disabled so the custom dashboard is the report delivered by CI. A workflow summary shows the key audit counts and points to the artifact, including when a severity quality gate fails.
+Every run uploads a `website-audit-reports` artifact containing the custom combined and per-site HTML reports, JSON/XLS summaries, raw results, history, screenshots, traces, and logs. Manual and scheduled runs also publish the interactive `reports/website-audit-report.html` dashboard to GitHub Pages. The **Publish audit dashboard** job summary links to the published dashboard. Pull-request runs remain artifact-only and do not deploy Pages.
 
-CI defaults to `AUDIT_FAIL_ON_SEVERITY=Medium` and a three-hour audit timeout. Override these through GitHub Actions repository variables `AUDIT_FAIL_ON_SEVERITY` and `GLOBAL_TIMEOUT_MS`. The job runs the TypeScript build and ESLint before the audit.
+The Pages bundle preserves the `reports/` and `screenshots/` layout so relative evidence links in the dashboard work. It includes generated HTML/XLS reports and screenshots, but excludes raw result JSON, logs, and traces. Each deployment replaces the previous Pages dashboard; use the downloadable workflow artifact for a run-specific copy.
+
+To enable deployment, a repository administrator must set **Settings → Pages → Build and deployment → Source** to **GitHub Actions** once. The report and screenshots published to Pages are publicly accessible; do not publish audit targets or evidence containing private information.
+
+CI defaults to `AUDIT_FAIL_ON_SEVERITY=Medium` and a three-hour audit timeout. Override these through GitHub Actions repository variables `AUDIT_FAIL_ON_SEVERITY` and `GLOBAL_TIMEOUT_MS`. The job runs the TypeScript build and ESLint before the audit. A generated report is still published when the audit fails its quality gate, and the workflow preserves the audit failure status after deployment.
 
 ## Docker
 

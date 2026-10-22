@@ -11,6 +11,8 @@ permissions:
 
 jobs:
   audit:
+    outputs:
+      report_ready: ${{ steps.prepare_pages.outputs.report_ready }}
     runs-on: ubuntu-latest
     timeout-minutes: 240
     env:
@@ -26,7 +28,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
           cache: npm
 
       - name: Install dependencies
@@ -42,10 +44,39 @@ jobs:
         run: npm run lint
 
       - name: Run website audit
+        id: audit_run
+        continue-on-error: true
         run: npm run audit
+
+      - name: Prepare GitHub Pages dashboard
+        id: prepare_pages
+        if: ${{ always() && (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && steps.audit_run.outcome != 'skipped' && hashFiles('reports/website-audit-report.html') != '' }}
+        run: |
+          set -euo pipefail
+          rm -rf _site
+          mkdir -p _site/reports _site/screenshots
+
+          cp reports/batch-summary.html reports/*-report.html reports/*.xls _site/reports/
+          find reports -mindepth 2 -maxdepth 2 -type f \( -name '*.html' -o -name '*.xls' \) \
+            ! -path 'reports/playwright-html/*' \
+            ! -path 'reports/raw-results/*' \
+            ! -path 'reports/allure-results/*' \
+            -exec cp --parents {} _site/ \;
+          cp -a screenshots/. _site/screenshots/
+
+          test -s _site/reports/website-audit-report.html
+          echo "report_ready=true" >> "$GITHUB_OUTPUT"
+
+      - name: Upload GitHub Pages artifact
+        if: ${{ steps.prepare_pages.outputs.report_ready == 'true' }}
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
 
       - name: Add audit summary
         if: always()
+        env:
+          PAGES_REPORT_READY: ${{ steps.prepare_pages.outputs.report_ready }}
         run: |
           node <<'NODE'
           const fs = require('node:fs');
@@ -62,6 +93,11 @@ jobs:
             summary += `- Total findings: ${counts.totalIssues ?? 0}\n`;
             summary += `- Critical / High / Medium / Low: ${counts.criticalIssues ?? 0} / ${counts.highIssues ?? 0} / ${counts.mediumIssues ?? 0} / ${counts.lowIssues ?? 0}\n`;
             summary += '\nDownload the `website-audit-reports` artifact below for the custom HTML reports and evidence.\n';
+            if (['workflow_dispatch', 'schedule'].includes(process.env.GITHUB_EVENT_NAME)) {
+              summary += process.env.PAGES_REPORT_READY === 'true'
+                ? 'The latest published dashboard link is in the **Publish audit dashboard** job summary.\n'
+                : 'The dashboard was not prepared for publishing; check the audit output and report-generation steps.\n';
+            }
           }
 
           fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
@@ -86,3 +122,51 @@ jobs:
             screenshots
             traces
             logs
+
+      - name: Preserve audit failure status
+        if: ${{ always() && steps.audit_run.outcome == 'failure' }}
+        run: |
+          echo "The website audit failed. Review the audit summary and generated reports."
+          exit 1
+
+  publish:
+    name: Publish audit dashboard
+    needs: audit
+    if: ${{ always() && !cancelled() && (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && needs.audit.outputs.report_ready == 'true' }}
+    runs-on: ubuntu-latest
+    concurrency:
+      group: github-pages
+      cancel-in-progress: false
+    permissions:
+      actions: read
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+      - name: Add dashboard link to job summary
+        if: always()
+        env:
+          PAGE_URL: ${{ steps.deployment.outputs.page_url }}
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const pageUrl = process.env.PAGE_URL;
+          let summary = '## Website audit dashboard\n\n';
+
+          if (pageUrl) {
+            const reportUrl = `${pageUrl.replace(/\/+$/, '')}/reports/website-audit-report.html`;
+            summary += `**Latest report:** [Open the interactive audit dashboard](${reportUrl})\n\n`;
+            summary += 'This link points to the latest deployment; a later manual or nightly run replaces it.\n';
+          } else {
+            summary += 'The report was generated, but the Pages deployment did not return a URL. Check the deployment step logs and repository Pages settings.\n';
+          }
+
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
+          NODE
