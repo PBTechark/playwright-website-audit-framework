@@ -677,7 +677,7 @@ export class HtmlReportGenerator {
       const metadata = fallbackEvidence.find((item) => item.path === evidencePath);
       return { path: evidencePath, sourcePath: metadata?.sourcePath, annotated: metadata?.annotated ?? false, width: metadata?.width, height: metadata?.height };
     });
-    const expected = issue.expected ?? `The page satisfies the ${issue.category.toLowerCase()} check without this defect.`;
+    const expected = issue.expected ?? `No ${issue.category.toLowerCase()} defect should be present.`;
     const actual = issue.actual ?? issue.description;
     const evidenceButtons = evidence.length
       ? evidence

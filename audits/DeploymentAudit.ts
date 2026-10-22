@@ -54,6 +54,8 @@ export class DeploymentAudit {
       );
     }
 
+    if (response && status && status >= 400) return issues;
+
     const bodyText = await page.locator('body').innerText().catch(() => '');
     if (!bodyText.trim()) {
       issues.push(

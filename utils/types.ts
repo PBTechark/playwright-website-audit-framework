@@ -112,6 +112,8 @@ export interface LinkFinding {
   statusCode?: number;
   failureType?: string;
   redirectChain: string[];
+  finalUrl?: string;
+  linkType?: 'logo';
 }
 
 export interface ImageFinding {
