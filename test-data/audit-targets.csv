@@ -3,7 +3,7 @@ ashmanco,https://ashmanco.com/,false,1,1
 sonrisevb,https://sonrisevb.church/,false,20,2
 ila1248,https://ila1248.org/,false,20,1
 the-internet,https://the-internet.herokuapp.com/dynamic_loading, false,3,2
-Broken Images,https://the-internet.herokuapp.com/broken_images,true,1,1
+Broken Images,https://the-internet.herokuapp.com/broken_images,false,1,1
 Status Codes,https://the-internet.herokuapp.com/status_codes,false,5,2
 Shifting Content,https://the-internet.herokuapp.com/shifting_content,false,4,2
 Floating Menu,https://the-internet.herokuapp.com/floating_menu, false,1,2
@@ -48,3 +48,4 @@ influencehairstaging,https://influancehair.wpenginepowered.com/,false,1,1
 influencehairimageremove,https://influancehair.wpenginepowered.com/from-the-ceo/,false,1,1
 checkboxalignment,https://mltcom.com/,false,1,1
 urology homepage Audit,https://urology.tekark.com/,false,1,1 
+Thejosie,https://thejosie.com/,true,1,1

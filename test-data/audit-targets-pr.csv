@@ -1,2 +1,2 @@
 name,url,enabled,maxPages,maxDepth
-Smoke Tests (BrokenImages),https://the-internet.herokuapp.com/broken_images,true,1,1
+Smoke Tests (BrokenImages),https://the-internet.herokuapp.com/broken_images,false,1,1
