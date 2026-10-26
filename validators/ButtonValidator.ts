@@ -8,9 +8,13 @@ type ButtonSnapshot = {
   text: string;
   visible: boolean;
   disabled: boolean;
-  width: number;
-  height: number;
   tagName: string;
+  role?: string;
+  className: string;
+  display: string;
+  visibility: string;
+  opacity: number;
+  boundingBox: { x: number; y: number; width: number; height: number };
   href?: string;
 };
 
@@ -31,14 +35,19 @@ type HoverState = {
 export class ButtonValidator {
   async validate(page: Page, url: string, viewport: string, targetName = 'default'): Promise<AuditIssue[]> {
     const buttons = await page.evaluate(() => {
+      const attributeSelector = (element: Element, attribute: string, value: string): string =>
+        `${element.tagName.toLowerCase()}[${attribute}="${CSS.escape(value)}"]`;
       const selectorFor = (element: Element): string => {
+        for (const attribute of ['data-testid', 'data-test', 'aria-label', 'name', 'href']) {
+          const value = element.getAttribute(attribute);
+          if (!value) continue;
+          const candidate = attributeSelector(element, attribute, value);
+          if (document.querySelectorAll(candidate).length === 1) return candidate;
+        }
         if (element.id) return `#${CSS.escape(element.id)}`;
-        const testIdAttribute = element.hasAttribute('data-testid') ? 'data-testid' : 'data-test';
-        const testId = element.getAttribute(testIdAttribute);
-        if (testId) return `[${testIdAttribute}="${CSS.escape(testId)}"]`;
         const parts: string[] = [];
         let node: Element | null = element;
-        while (node && node !== document.body && parts.length < 6) {
+        while (node && node !== document.body) {
           const siblings = node.parentElement
             ? Array.from(node.parentElement.children).filter((item) => item.tagName === node!.tagName)
             : [];
@@ -103,6 +112,7 @@ export class ButtonValidator {
         .slice(0, 250)
         .map((button): ButtonSnapshot => {
           const rect = button.getBoundingClientRect();
+          const style = window.getComputedStyle(button);
           const disabled =
             button.hasAttribute('disabled') ||
             button.getAttribute('aria-disabled') === 'true' ||
@@ -117,9 +127,18 @@ export class ButtonValidator {
               '',
             visible: isVisible(button),
             disabled,
-            width: rect.width,
-            height: rect.height,
             tagName: button.tagName.toLowerCase(),
+            role: button.getAttribute('role') ?? undefined,
+            className: typeof button.className === 'string' ? button.className : '',
+            display: style.display,
+            visibility: style.visibility,
+            opacity: Number(style.opacity),
+            boundingBox: {
+              x: Number(rect.x.toFixed(1)),
+              y: Number(rect.y.toFixed(1)),
+              width: Number(rect.width.toFixed(1)),
+              height: Number(rect.height.toFixed(1))
+            },
             href: button instanceof HTMLAnchorElement ? button.href : undefined
           };
         });
@@ -127,7 +146,24 @@ export class ButtonValidator {
     const issues: AuditIssue[] = [];
     const evidenceManager = new EvidenceManager(page, url, viewport, targetName);
     for (const [index, button] of buttons.entries()) {
+      let issueEvidence: ScreenshotEvidence | null | undefined;
+      const captureIssueEvidence = async (): Promise<ScreenshotEvidence | null> => {
+        if (issueEvidence === undefined) {
+          issueEvidence = await evidenceManager.captureElementDiagnostic(
+            `button-issue-${index}`,
+            button.selector,
+            `${button.tagName}${button.text ? ` "${button.text}"` : ''}`
+          );
+        }
+        return issueEvidence;
+      };
+      const evidenceFields = (shot: ScreenshotEvidence | null) => ({
+        evidence: shot ? [shot.path] : [],
+        evidenceDetails: shot ? [shot] : []
+      });
+
       if (!button.visible) {
+        const shot = await captureIssueEvidence();
         issues.push(
           createIssue({
             category: 'Buttons',
@@ -136,12 +172,16 @@ export class ButtonValidator {
             selector: button.selector,
             description: 'Button is present but not visible.',
             severity: 'Medium',
+            expected: 'A visible, operable control',
+            actual: `No visible control box (${button.boundingBox.width} x ${button.boundingBox.height}px; display=${button.display}, visibility=${button.visibility}, opacity=${button.opacity}).`,
             suggestedFix: 'Remove hidden interactive controls or make the button visible when users need it.',
-            details: button
+            details: button,
+            ...evidenceFields(shot)
           })
         );
       }
       if (!button.text) {
+        const shot = await captureIssueEvidence();
         issues.push(
           createIssue({
             category: 'Buttons',
@@ -151,16 +191,15 @@ export class ButtonValidator {
             description: 'Button has no visible or accessible label.',
             severity: 'Medium',
             suggestedFix: 'Add button text, aria-label, or a labelled icon name.',
-            details: button
+            details: button,
+            ...evidenceFields(shot)
           })
         );
       }
       if (button.visible && !button.disabled && button.text) {
         const hover = await this.inspectHoverState(page, button.selector).catch(() => null);
         if (hover?.reason) {
-          const shot = await evidenceManager
-            .captureLocator(`button-hover-text-${index}`, page.locator(button.selector).first())
-            .catch(() => null);
+          const shot = await captureIssueEvidence();
           issues.push(
             createIssue({
               category: 'Buttons',
@@ -172,13 +211,14 @@ export class ButtonValidator {
               expected: 'Human-visible button text remains visible and readable after hover.',
               actual: hover.reason,
               suggestedFix: 'Adjust hover text color, background color, opacity, visibility, or transition styles so the label remains readable.',
-              evidence: this.paths(shot),
-              details: { button, hover }
+              details: { ...button, hover },
+              ...evidenceFields(shot)
             })
           );
         }
       }
-      if (!button.disabled && (button.width < 32 || button.height < 32)) {
+      if (!button.disabled && (button.boundingBox.width < 32 || button.boundingBox.height < 32)) {
+        const shot = await captureIssueEvidence();
         issues.push(
           createIssue({
             category: 'Buttons',
@@ -188,7 +228,8 @@ export class ButtonValidator {
             description: 'Clickable button target is smaller than recommended touch size.',
             severity: 'Low',
             suggestedFix: 'Increase the clickable target to at least 32 by 32 CSS pixels, preferably 44 by 44 on touch UI.',
-            details: button
+            details: button,
+            ...evidenceFields(shot)
           })
         );
       }
@@ -304,7 +345,4 @@ export class ButtonValidator {
     }, selector);
   }
 
-  private paths(shot: ScreenshotEvidence | null): string[] {
-    return shot ? [shot.path] : [];
-  }
 }

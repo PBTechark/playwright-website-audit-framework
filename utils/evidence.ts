@@ -145,6 +145,123 @@ export class EvidenceManager {
     };
   }
 
+  async captureElementDiagnostic(
+    label: string,
+    selector: string,
+    description: string
+  ): Promise<ScreenshotEvidence | null> {
+    if (auditConfig.screenshotMode === 'off') {
+      return null;
+    }
+    const filePath = this.makePath(label);
+    const prepared = await this.page.evaluate(
+      ({ cssSelector, targetDescription }) => {
+        const target = document.querySelector<HTMLElement>(cssSelector);
+        if (!target) return null;
+
+        const targetStyle = window.getComputedStyle(target);
+        const targetRect = target.getBoundingClientRect();
+        const targetHasBox = targetRect.width > 1 && targetRect.height > 1;
+        let hasHighlightBox = targetHasBox;
+        let highlightTarget = target;
+        if (!targetHasBox) {
+          let ancestor = target.parentElement;
+          while (ancestor && ancestor !== document.body) {
+            const rect = ancestor.getBoundingClientRect();
+            const style = window.getComputedStyle(ancestor);
+            if (
+              rect.width > 1 &&
+              rect.height > 1 &&
+              style.display !== 'none' &&
+              style.visibility !== 'hidden' &&
+              Number(style.opacity) > 0.01
+            ) {
+              highlightTarget = ancestor;
+              hasHighlightBox = true;
+              break;
+            }
+            ancestor = ancestor.parentElement;
+          }
+        }
+
+        if (targetHasBox) target.scrollIntoView({ block: 'center', inline: 'center' });
+        else highlightTarget.scrollIntoView({ block: 'center', inline: 'center' });
+
+        const rect = highlightTarget.getBoundingClientRect();
+        const marker = document.createElement('div');
+        marker.id = 'audit-element-diagnostic';
+        marker.style.position = 'fixed';
+        marker.style.inset = '0';
+        marker.style.pointerEvents = 'none';
+        marker.style.zIndex = '2147483647';
+
+        if (hasHighlightBox) {
+          const outline = document.createElement('div');
+          outline.style.position = 'fixed';
+          outline.style.left = `${Math.max(0, rect.left - 6)}px`;
+          outline.style.top = `${Math.max(0, rect.top - 6)}px`;
+          outline.style.width = `${Math.max(1, rect.width + 12)}px`;
+          outline.style.height = `${Math.max(1, rect.height + 12)}px`;
+          outline.style.boxSizing = 'border-box';
+          outline.style.border = '4px solid #ff3028';
+          outline.style.borderRadius = '8px';
+          outline.style.background = 'rgba(255, 48, 40, 0.08)';
+          marker.appendChild(outline);
+        }
+
+        const callout = document.createElement('div');
+        callout.style.position = 'fixed';
+        callout.style.top = '12px';
+        callout.style.left = '12px';
+        callout.style.maxWidth = 'min(620px, calc(100vw - 24px))';
+        callout.style.padding = '12px 14px';
+        callout.style.border = '3px solid #ff3028';
+        callout.style.borderRadius = '8px';
+        callout.style.background = '#fff';
+        callout.style.color = '#111827';
+        callout.style.font = '600 14px/1.45 Arial, sans-serif';
+        callout.style.whiteSpace = 'pre-wrap';
+        callout.style.overflowWrap = 'anywhere';
+        callout.style.boxShadow = '0 4px 18px rgba(0,0,0,.3)';
+        const outlineDescription = targetHasBox
+          ? 'Red outline marks the control.'
+          : hasHighlightBox
+            ? 'Control has no rendered box; red outline marks the nearest visible container.'
+            : 'Control and ancestors have no rendered box; no on-page location can be outlined.';
+        callout.textContent = `AUDIT TARGET: ${targetDescription}\n${outlineDescription}\nSelector: ${cssSelector}\nSize: ${targetRect.width.toFixed(1)} x ${targetRect.height.toFixed(1)} px; display=${targetStyle.display}; visibility=${targetStyle.visibility}; opacity=${targetStyle.opacity}`;
+        marker.appendChild(callout);
+        document.documentElement.appendChild(marker);
+
+        return { width: window.innerWidth, height: window.innerHeight };
+      },
+      { cssSelector: selector, targetDescription: description }
+    );
+
+    if (!prepared) {
+      return null;
+    }
+
+    try {
+      await this.page.screenshot({ path: filePath, fullPage: false, timeout: 10_000 });
+    } finally {
+      await this.page.evaluate(() => {
+        document.getElementById('audit-element-diagnostic')?.remove();
+      });
+    }
+
+    if (!this.hasUsableScreenshot(filePath)) {
+      return null;
+    }
+
+    return {
+      label,
+      path: toRelativePath(filePath),
+      annotated: true,
+      width: prepared.width,
+      height: prepared.height
+    };
+  }
+
   private async capturePage(label: string, fullPage: boolean): Promise<ScreenshotEvidence> {
     const filePath = this.makePath(label);
     if (auditConfig.screenshotMode !== 'off') {

@@ -672,9 +672,17 @@ export class HtmlReportGenerator {
   }
 
   private issueHtml(issue: AuditIssue, outputDir: string, fallbackEvidence: ScreenshotEvidence[]): string {
-    const evidencePaths = this.uniquePaths(issue.evidence?.length ? issue.evidence : fallbackEvidence.map((item) => item.path));
+    const issueEvidence = issue.evidenceDetails ?? [];
+    const evidencePaths = this.uniquePaths(
+      issue.evidence?.length
+        ? issue.evidence
+        : issue.category === 'Buttons'
+          ? []
+          : fallbackEvidence.map((item) => item.path)
+    );
     const evidence = evidencePaths.map((evidencePath) => {
-      const metadata = fallbackEvidence.find((item) => item.path === evidencePath);
+      const metadata = issueEvidence.find((item) => item.path === evidencePath) ??
+        fallbackEvidence.find((item) => item.path === evidencePath);
       return { path: evidencePath, sourcePath: metadata?.sourcePath, annotated: metadata?.annotated ?? false, width: metadata?.width, height: metadata?.height };
     });
     const expected = issue.expected ?? `No ${issue.category.toLowerCase()} defect should be present.`;
@@ -706,12 +714,13 @@ export class HtmlReportGenerator {
         ${this.fieldHtml('URL', issue.url, false, true)}
         ${this.fieldHtml('Viewport', issue.viewport)}
         ${this.fieldHtml('Target', issue.targetName ?? 'N/A')}
-        ${this.fieldHtml('Selector', issue.selector ?? 'page')}
+        ${this.fieldHtml('Selector', issue.selector ?? 'page', false, true)}
       </div>
       <div class="issue-detail-grid">
         ${this.fieldHtml('Expected', expected, true)}
         ${this.fieldHtml('Actual', actual, true)}
       </div>
+      ${this.buttonDiagnosticHtml(issue)}
       <div class="issue-actions" aria-label="Evidence actions">
         ${evidenceButtons}
       </div>
@@ -724,6 +733,42 @@ export class HtmlReportGenerator {
       <div class="recommendation-box"><strong>Recommendation:</strong> ${this.escape(issue.suggestedFix)}</div>
       ${issue.details ? `<details class="issue-details"><summary>Technical details</summary><pre>${this.escape(JSON.stringify(issue.details, null, 2))}</pre></details>` : ''}
     </article>`;
+  }
+
+  private buttonDiagnosticHtml(issue: AuditIssue): string {
+    if (issue.category !== 'Buttons' || !issue.details || typeof issue.details !== 'object' || Array.isArray(issue.details)) {
+      return '';
+    }
+
+    const details = issue.details as Record<string, unknown>;
+    const boundingBox = details.boundingBox;
+    const box =
+      boundingBox && typeof boundingBox === 'object' && !Array.isArray(boundingBox)
+        ? (boundingBox as Record<string, unknown>)
+        : undefined;
+    const identifiedRows: Array<[string, unknown]> = [
+      ['Element', details.tagName],
+      ['Label', details.text],
+      ['Role', details.role],
+      ['Class', details.className],
+      ['Link destination', details.href],
+      ['Display', details.display],
+      ['Visibility', details.visibility],
+      ['Opacity', details.opacity],
+      [
+        'Bounding box',
+        box
+          ? `${String(box.width ?? '?')} x ${String(box.height ?? '?')} px at (${String(box.x ?? '?')}, ${String(box.y ?? '?')})`
+          : undefined
+      ]
+    ];
+    const rows = identifiedRows.filter(([, value]) => value !== undefined && value !== '');
+
+    if (rows.length === 0) return '';
+    return `<section class="control-diagnostic" aria-label="Button identification details">
+      <strong>Button identification</strong>
+      <dl>${rows.map(([label, value]) => `<div><dt>${this.escape(label)}</dt><dd>${this.escape(value)}</dd></div>`).join('')}</dl>
+    </section>`;
   }
 
   private layoutShiftEvidenceHtml(details: unknown): string {
@@ -908,6 +953,12 @@ export class HtmlReportGenerator {
     .browser-details-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin-top:10px; }
     .issue-detail-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin-bottom:12px; }
     .issue-detail-grid p { margin:0; font-size:14px; line-height:1.6; color:var(--text); }
+    .control-diagnostic { margin:0 0 12px; padding:12px; border:1px solid #fca5a5; border-left:5px solid #ef4444; border-radius:10px; background:#fff7f7; }
+    .control-diagnostic > strong { display:block; margin-bottom:8px; color:#991b1b; }
+    .control-diagnostic dl { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:8px; margin:0; }
+    .control-diagnostic dl div { min-width:0; padding:8px; border:1px solid #fecaca; border-radius:8px; background:#fff; }
+    .control-diagnostic dt { margin-bottom:4px; color:#7f1d1d; font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:.06em; }
+    .control-diagnostic dd { margin:0; overflow-wrap:anywhere; color:var(--text); font-size:12px; }
     .issue-actions { display:flex; flex-wrap:wrap; align-items:flex-start; gap:8px; min-width:0; }
     .evidence-item { display:flex; flex-wrap:wrap; align-items:center; gap:6px; max-width:100%; }
     .evidence-button { background:#0f172a; color:#fff; border:1px solid #0f172a; border-radius:10px; padding:10px 12px; font-weight:700; cursor:pointer; white-space:nowrap; }
@@ -941,6 +992,9 @@ export class HtmlReportGenerator {
     [data-theme="dark"] .status-panel.passed { background:#0d281c; color:#bbf7d0; border-color:#166534; }
     [data-theme="dark"] .recommendation-box { background:#33270d; border-color:#8a6415; color:#fde68a; }
     [data-theme="dark"] .issue-meta-grid div, [data-theme="dark"] .issue-detail-grid div { background:#172033; }
+    [data-theme="dark"] .control-diagnostic { background:#2a1118; border-color:#7f1d1d; }
+    [data-theme="dark"] .control-diagnostic > strong, [data-theme="dark"] .control-diagnostic dt { color:#fecaca; }
+    [data-theme="dark"] .control-diagnostic dl div { background:#172033; border-color:#7f1d1d; }
     @media (max-width: 768px) {
       .page-shell { padding:14px; }
       .topbar { flex-direction:column; }

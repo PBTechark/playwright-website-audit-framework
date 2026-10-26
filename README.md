@@ -42,6 +42,8 @@ The audit flow is automatic:
 5. Each test captures screenshots, issues, console/network findings, SEO data, accessibility violations, image/link/video problems, forms, buttons, and performance metrics.
 6. `global-teardown.ts` aggregates all raw results into per-site HTML reports and a batch summary.
 
+Button visibility findings include a dedicated annotated screenshot, copied CSS selector, and element identification details (label, tag, computed visibility, and rendered size). If a hidden control has no rendered box, the evidence marks its nearest visible container and explains that the control itself has no visible location to outline. Button findings do not reuse unrelated page screenshots.
+
 When a navigation returns HTTP 4xx/5xx, the audit reports the deployment response and skips page-content checks for that viewport. This prevents access-denied or server-error pages from being misreported as missing headers, footers, or content. The header-logo link is checked separately, including off-site destinations and its complete HTTP redirect chain; an off-site final destination is reported as a high-severity link issue.
 
 ## Reports

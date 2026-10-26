@@ -12,6 +12,7 @@ export function createIssue(input: {
   selector?: string;
   severity?: Severity;
   evidence?: string[];
+  evidenceDetails?: AuditIssue['evidenceDetails'];
   expected?: string;
   actual?: string;
   businessImpact?: string;
@@ -37,6 +38,7 @@ export function createIssue(input: {
     description: input.description,
     selector: input.selector,
     evidence: input.evidence,
+    evidenceDetails: input.evidenceDetails,
     expected: input.expected,
     actual: input.actual,
     businessImpact: input.businessImpact,

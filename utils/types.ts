@@ -71,6 +71,7 @@ export interface AuditIssue {
   description: string;
   selector?: string;
   evidence?: string[];
+  evidenceDetails?: ScreenshotEvidence[];
   expected?: string;
   actual?: string;
   businessImpact?: string;
