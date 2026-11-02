@@ -3,7 +3,7 @@ import path from 'path';
 import { auditConfig } from '../config/auditConfig';
 import { ensureDir, listJsonFiles, readJsonFile, safeFileName, writeJsonFile } from '../utils/fileSystem';
 import { sanitizeAuditResultForReporting } from '../utils/reportFilters';
-import { AuditCheck, AuditIssue, AuditResult, ScreenshotEvidence } from '../utils/types';
+import { AuditIssue, AuditResult } from '../utils/types';
 import { isBlockingSeverity, qualityGateLabel } from '../utils/severityGate';
 
 export class HtmlReportGenerator {
@@ -242,19 +242,31 @@ export class HtmlReportGenerator {
 
   private chartBars(items: Array<[string, number | string, string]>): string {
     const maximum = Math.max(1, ...items.map(([, value]) => Number(value)));
-    return `<div class="bar-chart">${items.map(([label, value, tone]) => `<div class="bar-row"><span>${this.escape(label)}</span><div class="bar-track"><i class="bar-fill ${tone}" style="width:${Math.max(2, (Number(value) / maximum) * 100)}%"></i></div><strong>${this.escape(value)}</strong></div>`).join('')}</div>`;
+    return `<div class="bar-chart">${items
+      .map(([label, value, tone]) => {
+        const width = Number(value) ? Math.max(2, (Number(value) / maximum) * 100) : 0;
+        return `<button type="button" class="bar-row" data-filter-severity="${this.escapeAttr(label)}" title="Show ${this.escapeAttr(label.toLowerCase())} issues"><span class="bar-label"><i class="sev-mark ${tone}" aria-hidden="true"></i>${this.escape(label)}</span><span class="bar-track"><i class="bar-fill ${tone}" style="width:${width}%"></i></span><strong>${this.escape(value)}</strong></button>`;
+      })
+      .join('')}</div>`;
   }
 
   private trendBars(history: Array<Record<string, number | string>>): string {
-    if (!history.length) return '<div class="empty-chart">No history available.</div>';
+    if (!history.length) return '<p class="empty-chart">No earlier runs yet. Run another audit to compare.</p>';
     const maximum = Math.max(1, ...history.map((item) => Number(item.totalIssues ?? 0)));
-    return `<div class="trend-chart">${history.map((item) => `<div class="trend-column"><div class="trend-value">${this.escape(item.totalIssues ?? 0)}</div><i style="height:${Math.max(4, (Number(item.totalIssues ?? 0) / maximum) * 100)}%"></i><span>${this.escape(String(item.runId ?? '').slice(-6))}</span></div>`).join('')}</div>`;
+    return `<div class="trend-chart">${history
+      .map((item) => {
+        const total = Number(item.totalIssues ?? 0);
+        const runId = String(item.runId ?? '');
+        const when = runId.length >= 12 ? `${runId.slice(6, 8)}/${runId.slice(4, 6)} ${runId.slice(8, 10)}:${runId.slice(10, 12)}` : runId;
+        return `<div class="trend-column" title="${this.escapeAttr(`Run ${runId}: ${total} issues`)}"><span class="trend-value">${total}</span><i style="height:${Math.max(4, (total / maximum) * 100)}%"></i><span class="trend-label">${this.escape(when)}</span></div>`;
+      })
+      .join('')}</div>`;
   }
 
   private chartTable(summary: Record<string, number | string>): string {
-    return ['criticalIssues', 'highIssues', 'mediumIssues', 'lowIssues']
-      .map((key) => `<span><b>${this.escape(this.label(key))}</b> ${this.escape(summary[key] ?? 0)}</span>`)
-      .join('');
+    return `${this.escape(summary.totalIssues ?? 0)} in total: ${['criticalIssues', 'highIssues', 'mediumIssues', 'lowIssues']
+      .map((key) => `${this.escape(summary[key] ?? 0)} ${this.escape(this.label(key).replace(/ issues$/, ''))}`)
+      .join(', ')}.`;
   }
 
   private pageRows(results: AuditResult[]): string {
@@ -270,7 +282,12 @@ export class HtmlReportGenerator {
         const rank = { Critical: 0, High: 1, Medium: 2, Low: 3 } as Record<AuditIssue['severity'], number>;
         return current === 'Pass' || (issue.severity !== 'Low' && rank[issue.severity] < rank[current as AuditIssue['severity']]) ? issue.severity : current;
       }, 'Pass');
-      return `<article class="page-card" data-search="${this.escapeAttr(`${url} ${page.target}`)}"><div class="page-card-head"><span class="severity-badge ${highest === 'Pass' ? 'Low' : highest}">${this.escape(highest)}</span><strong>${page.issues.length} issue(s)</strong></div><h3>${this.escape(page.target)}</h3><a href="#" data-page-url="${this.escapeAttr(url)}">${this.escape(url)}</a><p>${page.viewports.size} viewport(s) audited</p></article>`;
+      return `<button type="button" class="page-card" data-filter-page="${this.escapeAttr(url)}" data-search="${this.escapeAttr(`${url} ${page.target}`)}" title="Show the issues on this page">
+        <span class="page-card-head"><span class="severity-badge ${highest}">${highest === 'Pass' ? '' : `<i class="sev-mark ${highest.toLowerCase()}" aria-hidden="true"></i>`}${highest === 'Pass' ? 'No issues' : `Highest: ${this.escape(highest)}`}</span><span class="page-count">${this.plural(page.issues.length, 'finding')}</span></span>
+        <span class="page-title">${this.escape(page.target)}</span>
+        <span class="page-url">${this.escape(url)}</span>
+        <span class="page-meta">${this.plural(page.viewports.size, 'viewport')} audited.<span class="screen-only"> Show this page's issues</span></span>
+      </button>`;
     }).join('') || '<div class="empty-state">No audited pages were produced.</div>';
   }
 
@@ -376,23 +393,33 @@ export class HtmlReportGenerator {
     ).length;
     const gateEnabled = auditConfig.qualityGateSeverity !== 'Off';
     const gateFailed = gateEnabled && blockingCount > 0;
-    const issueMarkup = orderedIssues.length
-      ? orderedIssues.map((issue) => {
-          const matchingResult = results.find((result) =>
-            result.page.url === issue.url &&
-            result.viewport === issue.viewport &&
-            (!issue.targetName || issue.targetName === result.targetName || issue.targetName === result.page.targetName)
-          );
-          return this.issueHtml(
-            issue,
-            outputDir,
-            matchingResult?.screenshots ?? []
-          );
-        }).join('')
+    // Page executions are numbered so issue cards can link to the row for each viewport.
+    const executionIndex = new Map(results.map((result, index) => [`${result.page.url}\u0000${result.viewport}`, index] as const));
+    const groups = this.groupIssues(orderedIssues);
+    const issueMarkup = groups.length
+      ? groups.map((group, index) => this.issueGroupHtml(group, index, outputDir, results, executionIndex)).join('')
       : '<div class="empty-state">No issues matched the current report scope.</div>';
 
+    const severityKeys: Record<string, AuditIssue['severity']> = {
+      criticalIssues: 'Critical',
+      highIssues: 'High',
+      mediumIssues: 'Medium',
+      lowIssues: 'Low'
+    };
     const summaryCards = Object.entries(summary)
-      .map(([key, value]) => `<div class="metric"><span>${this.escape(this.label(key))}</span><strong>${this.escape(value)}</strong></div>`)
+      .map(([key, value]) => {
+        const severity = severityKeys[key];
+        const href = key === 'viewportExecutions' ? '#executions' : key === 'targets' || key === 'pagesCrawled' ? '#pages' : '#issues';
+        const action = severity ? ` data-filter-severity="${severity}"` : key === 'totalIssues' ? ' data-reset-filters' : '';
+        const hint = severity
+          ? `Show ${severity.toLowerCase()} issues`
+          : href === '#pages'
+            ? 'Go to audited pages'
+            : href === '#executions'
+              ? 'Go to page executions'
+              : 'Go to issues';
+        return `<a class="metric${key === 'status' ? ' metric-status' : ''}" href="${href}"${action}><span class="metric-label">${severity ? `<i class="sev-mark ${severity.toLowerCase()}" aria-hidden="true"></i>` : ''}${this.escape(this.label(key))}</span><strong class="metric-value">${this.escape(value)}${key === 'healthScore' ? '<small> / 100</small>' : ''}</strong><span class="metric-hint">${hint}</span></a>`;
+      })
       .join('');
     const pageRows = this.pageRows(results);
     const severityChart = this.chartBars([
@@ -402,6 +429,9 @@ export class HtmlReportGenerator {
       ['Low', summary.lowIssues ?? 0, 'low']
     ]);
     const trendChart = this.trendBars(metadata.history);
+    const categories = Array.from(new Set(orderedIssues.map((issue) => issue.category)));
+    const viewports = Array.from(new Set(results.map((result) => result.viewport)));
+    const generated = new Date().toISOString().replace('T', ' ').slice(0, 16);
 
     const html = `<!doctype html>
 <html lang="en">
@@ -412,29 +442,51 @@ export class HtmlReportGenerator {
   ${this.styles()}
 </head>
 <body>
-  <div class="page-shell">
-    <header class="topbar">
-      <div>
-        <div class="eyebrow">Website audit dashboard</div>
-        <h1>${this.escape(title)}</h1>
+  <a class="skip-link" href="#issues">Skip to issues</a>
+  <header class="report-header">
+    <div class="wrap header-top">
+      <div class="brand"><span class="logo" aria-hidden="true">WA</span><span>Website audit report</span></div>
+      <div class="header-actions">
+        <a id="downloadPdf" class="button button-light" href="#">Download PDF</a>
+        <span class="theme-switch">
+          <span id="themeLabel">Dark theme</span>
+          <button type="button" id="themeToggle" role="switch" aria-checked="false" aria-labelledby="themeLabel"><span class="knob"></span></button>
+        </span>
       </div>
-      <div class="topbar-meta">Run ${this.escape(metadata.runId)}<br>Generated ${new Date().toISOString()}<br>${this.escape(targetLabel)}</div>
-    </header>
+    </div>
+    <div class="wrap header-title">
+      <h1>${this.escape(title)}</h1>
+      <p>${this.escape(targetLabel)}. Run ${this.escape(metadata.runId)}, generated ${this.escape(generated)} UTC.</p>
+    </div>
+  </header>
 
-    <main class="dashboard-main">
-      <section class="summary-grid">
-        ${summaryCards}
-      </section>
+  <nav class="section-nav" aria-label="Report sections">
+    <div class="wrap">
+      <a href="#summary">Summary</a>
+      <a href="#pages">Audited pages</a>
+      <a href="#issues">Issues <span class="nav-count" id="navIssueCount">${groups.length}</span></a>
+      <a href="#executions">Page executions</a>
+    </div>
+  </nav>
 
-      <section class="insights-grid">
-        <article class="insight-card"><div class="section-kicker">Severity distribution</div>${severityChart}<div class="chart-table">${this.chartTable(summary)}</div></article>
-        <article class="insight-card"><div class="section-kicker">Severity trend</div>${trendChart}<p class="chart-note">${metadata.history.length > 1 ? 'Historical snapshots are retained from recent audit runs.' : 'Run another audit to establish a historical comparison.'}</p></article>
-      </section>
-
-      <section class="status-panel ${gateFailed ? 'failed' : 'passed'}">
-        <div>
-          <strong>${gateEnabled ? (gateFailed ? 'Quality gate failed' : 'Quality gate passed') : 'Quality gate disabled'}</strong>
-        </div>
+  <main class="wrap">
+    <section id="summary" class="section">
+      <div class="section-heading"><h2>Summary</h2><p class="screen-only">Select any figure to jump to the matching part of the report.</p></div>
+      <div class="summary-grid">${summaryCards}</div>
+      <div class="insights-grid">
+        <article class="panel">
+          <h3>Issues by severity</h3>
+          ${severityChart}
+          <p class="chart-note">${this.chartTable(summary)}<span class="screen-only"> Select a row to see those issues.</span></p>
+        </article>
+        <article class="panel">
+          <h3>Issues over recent runs</h3>
+          ${trendChart}
+          ${metadata.history.length ? `<p class="chart-note">${metadata.history.length > 1 ? 'Total issues in each recent audit run, oldest first.' : 'Run another audit to establish a historical comparison.'}</p>` : ''}
+        </article>
+      </div>
+      <div class="status-panel ${gateEnabled ? (gateFailed ? 'failed' : 'passed') : 'off'}" role="status">
+        <strong>${gateEnabled ? (gateFailed ? 'Quality gate failed' : 'Quality gate passed') : 'Quality gate disabled'}</strong>
         <span>${
           gateEnabled
             ? (gateFailed
@@ -442,297 +494,429 @@ export class HtmlReportGenerator {
                 : `No ${this.escape(qualityGateLabel(auditConfig.qualityGateSeverity))} findings were detected.`)
             : 'Set AUDIT_FAIL_ON_SEVERITY to Medium, High, or Critical to enable final audit gating.'
         }</span>
-      </section>
-
-      <section class="toolbar">
-        <div class="field-group">
-          <label for="severityFilter">Severity</label>
-          <select id="severityFilter">
-            <option value="all">All</option>
-            <option value="Critical">Critical</option>
-            <option value="High">High</option>
-            <option value="Medium">Medium</option>
-            <option value="Low">Low</option>
-          </select>
-        </div>
-        <div class="field-group">
-          <label for="categoryFilter">Category</label>
-          <select id="categoryFilter">
-            <option value="all">All</option>
-            ${Array.from(new Set(orderedIssues.map((issue) => issue.category))).map((category) => `<option value="${this.escapeAttr(category)}">${this.escape(category)}</option>`).join('')}
-          </select>
-        </div>
-        <div class="field-group">
-          <label for="viewportFilter">Viewport</label>
-          <select id="viewportFilter">
-            <option value="all">All</option>
-            ${Array.from(new Set(orderedIssues.map((issue) => issue.viewport))).map((viewport) => `<option value="${this.escapeAttr(viewport)}">${this.escape(viewport)}</option>`).join('')}
-          </select>
-        </div>
-        <div class="field-group search-box">
-          <label for="searchInput">Search</label>
-          <input id="searchInput" type="text" placeholder="URL, issue, selector..." />
-        </div>
-        <div class="toolbar-actions">
-          <button type="button" id="resetFilters">Reset</button>
-          <button type="button" id="exportJson">Export JSON</button>
-          <a class="toolbar-button" href="website-audit-report.xls" download>Export Excel</a>
-          <button type="button" id="themeToggle" aria-label="Toggle theme">Theme</button>
-        </div>
-      </section>
-
-      <section class="report-shell page-index">
-        <div class="section-heading"><div><div class="section-kicker">Page drill-down</div><h2>Audited pages</h2></div><span id="visibleCount"></span></div>
-        <div class="page-grid">${pageRows}</div>
-      </section>
-
-      <section class="issues-panel">
-        ${issueMarkup}
-      </section>
-    </main>
-
-    <section class="report-shell">
-      <h2>Assertion Register</h2>
-      <p>Every detected component check is recorded, including passes, so readers can see exactly what was validated.</p>
-      ${this.checksHtml(results.flatMap((result) => result.checks ?? []), outputDir)}
-      <h2>Page Executions</h2>
-      <table>
-        <thead><tr><th>Target</th><th>Page</th><th>Viewport</th><th>Screen Resolution</th><th>Issues</th><th>Load</th><th>Screenshots</th></tr></thead>
-        <tbody>
-          ${results
-            .map(
-              (result) => `<tr>
-                <td>${this.escape(result.targetName || result.page.targetName)}</td>
-                <td><a href="${this.escapeAttr(result.page.url)}">${this.escape(result.page.url)}</a></td>
-                <td>${this.escape(result.viewport)}</td>
-                <td>${this.resolutionHtml(result.resolution)}</td>
-                <td>${result.issues.length}</td>
-                <td>${result.performance?.loadTimeMs ?? 'n/a'}ms</td>
-                <td>${result.screenshots.map((shot) => `<a href="${this.escapeAttr(this.assetHref(outputDir, shot.path))}">${this.escape(shot.label)}</a>`).join(' ')}</td>
-              </tr>`
-            )
-            .join('')}
-        </tbody>
-      </table>
+      </div>
     </section>
-  </div>
 
-  <div id="evidenceModal" class="modal" aria-hidden="true">
+    <section id="pages" class="section">
+      <div class="section-heading"><h2>Audited pages</h2><p class="screen-only">Select a page to see only its issues.</p></div>
+      <div class="page-grid">${pageRows}</div>
+    </section>
+
+    <section id="issues" class="section">
+      <div class="section-heading"><h2>Issues</h2><p>The same problem found in several viewports is listed once, with every viewport it affects.</p></div>
+      <div class="toolbar panel">
+        <div class="field"><label for="severityFilter">Severity</label>
+          <select id="severityFilter"><option value="all">All severities</option><option>Critical</option><option>High</option><option>Medium</option><option>Low</option></select></div>
+        <div class="field"><label for="categoryFilter">Category</label>
+          <select id="categoryFilter"><option value="all">All categories</option>${categories.map((category) => `<option value="${this.escapeAttr(category)}">${this.escape(category)}</option>`).join('')}</select></div>
+        <div class="field"><label for="viewportFilter">Viewport</label>
+          <select id="viewportFilter"><option value="all">All viewports</option>${viewports.map((viewport) => `<option value="${this.escapeAttr(viewport)}">${this.escape(viewport)}</option>`).join('')}</select></div>
+        <div class="field field-wide"><label for="searchInput">Search</label>
+          <input id="searchInput" type="search" placeholder="URL, issue or selector" /></div>
+        <div class="toolbar-actions">
+          <button type="button" class="button" id="resetFilters">Reset filters</button>
+          <button type="button" class="button" id="toggleAll">Collapse all</button>
+          <button type="button" class="button" id="exportJson">Export JSON</button>
+          <a class="button" href="website-audit-report.xls" download>Export Excel</a>
+        </div>
+      </div>
+      <div class="result-bar"><p id="visibleCount" aria-live="polite"></p><div id="activeFilters" class="active-filters"></div></div>
+      <div class="issue-list">${issueMarkup}</div>
+    </section>
+
+    <section id="executions" class="section">
+      <div class="section-heading"><h2>Page executions</h2><p>Each row is one page checked in one viewport.<span class="screen-only"> Select a findings count to see those issues.</span></p></div>
+      <div class="table-wrap panel">
+        <table class="exec-table">
+          <thead><tr><th scope="col">Target</th><th scope="col">Page</th><th scope="col">Viewport</th><th scope="col">Screen resolution</th><th scope="col">Findings</th><th scope="col">Load</th><th scope="col">Screenshots</th></tr></thead>
+          <tbody>
+            ${results
+              .map(
+                (result, index) => `<tr id="exec-${index}">
+                  <td>${this.escape(result.targetName || result.page.targetName)}</td>
+                  <td class="cell-url"><a href="${this.escapeAttr(result.page.url)}" target="_blank" rel="noopener noreferrer">${this.escape(result.page.url)}</a></td>
+                  <td>${this.escape(result.viewport)}</td>
+                  <td>${this.resolutionHtml(result.resolution)}</td>
+                  <td><button type="button" class="link-button" data-filter-page="${this.escapeAttr(result.page.url)}" data-filter-viewport="${this.escapeAttr(result.viewport)}">${this.plural(result.issues.length, 'finding')}</button></td>
+                  <td class="nowrap">${result.performance?.loadTimeMs !== undefined ? `${Math.round(result.performance.loadTimeMs)} ms` : 'Not measured'}</td>
+                  <td><div class="shot-links">${result.screenshots
+                    .map((shot) => `<button type="button" class="chip-button" data-evidence-src="${this.escapeAttr(this.assetHref(outputDir, shot.path))}" data-evidence-type="image" data-evidence-title="${this.escapeAttr(`${result.viewport}: ${this.screenshotLabel(shot.label)}`)}">${this.escape(this.screenshotLabel(shot.label))}</button>`)
+                    .join('')}</div></td>
+                </tr>`
+              )
+              .join('')}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <div id="evidenceModal" class="modal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
     <div class="modal-content">
-      <button class="modal-close" type="button" aria-label="Close evidence">×</button>
-      <div id="modalBody"></div>
+      <div class="modal-header"><h3 id="modalTitle"></h3><button class="button modal-close" type="button">Close</button></div>
+      <div id="modalBody" class="modal-media"></div>
     </div>
   </div>
 
   <script>
-    const severityFilter = document.getElementById('severityFilter');
-    const categoryFilter = document.getElementById('categoryFilter');
-    const viewportFilter = document.getElementById('viewportFilter');
-    const searchInput = document.getElementById('searchInput');
-    const modal = document.getElementById('evidenceModal');
-    const modalBody = document.getElementById('modalBody');
-    const modalClose = document.querySelector('.modal-close');
-    const issueCards = Array.from(document.querySelectorAll('.issue-card'));
-    const pageCards = Array.from(document.querySelectorAll('.page-card'));
-    const visibleCount = document.getElementById('visibleCount');
-    const reportRunId = '${this.escapeAttr(metadata.runId)}';
-
-    function applyFilters() {
-      const severity = severityFilter.value;
-      const category = categoryFilter.value;
-      const viewport = viewportFilter.value;
-      const query = (searchInput.value || '').trim().toLowerCase();
-
-      issueCards.forEach((card) => {
-        const matchesSeverity = severity === 'all' || card.dataset.severity === severity;
-        const matchesCategory = category === 'all' || card.dataset.category === category;
-        const matchesViewport = viewport === 'all' || card.dataset.viewport === viewport;
-        const searchText = (card.dataset.search || '').toLowerCase();
-        const matchesSearch = !query || searchText.includes(query);
-        const shouldShow = matchesSeverity && matchesCategory && matchesViewport && matchesSearch;
-        card.style.display = shouldShow ? '' : 'none';
-      });
-      pageCards.forEach((card) => {
-        const pageText = (card.dataset.search || '').toLowerCase();
-        card.style.display = !query || pageText.includes(query) ? '' : 'none';
-      });
-      if (visibleCount) visibleCount.textContent = issueCards.filter((card) => card.style.display !== 'none').length + ' findings shown';
+  (function () {
+    var root = document.documentElement;
+    var reportRunId = '${this.escapeAttr(metadata.runId)}';
+    var reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    function scrollToId(id) {
+      var target = document.getElementById(id);
+      if (target) target.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
     }
 
-    [severityFilter, categoryFilter, viewportFilter, searchInput].forEach((element) => {
+    // Theme switch: follows the system until the reader chooses, then remembers the choice.
+    var themeToggle = document.getElementById('themeToggle');
+    function setTheme(theme, remember) {
+      root.dataset.theme = theme;
+      themeToggle.setAttribute('aria-checked', String(theme === 'dark'));
+      if (remember) { try { localStorage.setItem('audit-theme', theme); } catch (error) {} }
+    }
+    var savedTheme = null;
+    try { savedTheme = localStorage.getItem('audit-theme'); } catch (error) {}
+    setTheme(savedTheme || (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'), false);
+    themeToggle.addEventListener('click', function () { setTheme(root.dataset.theme === 'dark' ? 'light' : 'dark', true); });
+
+    // Download PDF: served from the dashboard, the backend renders the PDF; opened as a file, the print dialog saves one.
+    var pdfLink = document.getElementById('downloadPdf');
+    var apiAt = location.pathname.indexOf('/api/audits/');
+    var filesAt = location.pathname.indexOf('/files/');
+    if (location.protocol.indexOf('http') === 0 && apiAt !== -1 && filesAt > apiAt) {
+      pdfLink.href = location.pathname.slice(0, filesAt) + '/report.pdf?path=' + encodeURIComponent(decodeURIComponent(location.pathname.slice(filesAt + 7)));
+    } else {
+      pdfLink.title = 'Opens the print dialog. Choose Save as PDF.';
+      pdfLink.addEventListener('click', function (event) { event.preventDefault(); window.print(); });
+    }
+
+    // Filters
+    var severityFilter = document.getElementById('severityFilter');
+    var categoryFilter = document.getElementById('categoryFilter');
+    var viewportFilter = document.getElementById('viewportFilter');
+    var searchInput = document.getElementById('searchInput');
+    var activeFilters = document.getElementById('activeFilters');
+    var visibleCount = document.getElementById('visibleCount');
+    var navIssueCount = document.getElementById('navIssueCount');
+    var issueCards = Array.prototype.slice.call(document.querySelectorAll('.issue'));
+    var pageFilter = '';
+
+    function applyFilters() {
+      var severity = severityFilter.value;
+      var category = categoryFilter.value;
+      var viewport = viewportFilter.value;
+      var query = (searchInput.value || '').trim().toLowerCase();
+      var shown = 0;
+      issueCards.forEach(function (card) {
+        var match = (severity === 'all' || card.dataset.severity === severity) &&
+          (category === 'all' || card.dataset.category === category) &&
+          (viewport === 'all' || (card.dataset.viewports || '').indexOf('|' + viewport + '|') !== -1) &&
+          (!pageFilter || card.dataset.page === pageFilter) &&
+          (!query || (card.dataset.search || '').toLowerCase().indexOf(query) !== -1);
+        card.hidden = !match;
+        if (match) shown += 1;
+      });
+      var filtered = shown !== issueCards.length;
+      visibleCount.textContent = filtered
+        ? 'Showing ' + shown + ' of ' + issueCards.length + ' issues.'
+        : issueCards.length + (issueCards.length === 1 ? ' issue.' : ' issues.');
+      navIssueCount.textContent = String(shown);
+      activeFilters.textContent = '';
+      if (pageFilter) {
+        var chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'filter-chip';
+        chip.textContent = 'Page: ' + pageFilter + '  (remove)';
+        chip.addEventListener('click', function () { pageFilter = ''; applyFilters(); });
+        activeFilters.appendChild(chip);
+      }
+    }
+
+    function resetFilters() {
+      severityFilter.value = 'all'; categoryFilter.value = 'all'; viewportFilter.value = 'all'; searchInput.value = ''; pageFilter = '';
+    }
+
+    [severityFilter, categoryFilter, viewportFilter, searchInput].forEach(function (element) {
       element.addEventListener('input', applyFilters);
       element.addEventListener('change', applyFilters);
     });
+    document.getElementById('resetFilters').addEventListener('click', function () { resetFilters(); applyFilters(); });
 
-    document.getElementById('resetFilters').addEventListener('click', () => {
-      severityFilter.value = 'all'; categoryFilter.value = 'all'; viewportFilter.value = 'all'; searchInput.value = ''; applyFilters();
+    // Connected components: figures, bars, page cards and table rows filter the issue list and jump to it.
+    document.addEventListener('click', function (event) {
+      var trigger = event.target.closest('[data-filter-severity], [data-filter-page], [data-reset-filters]');
+      if (!trigger) return;
+      event.preventDefault();
+      resetFilters();
+      if (trigger.hasAttribute('data-filter-severity')) severityFilter.value = trigger.getAttribute('data-filter-severity');
+      if (trigger.hasAttribute('data-filter-page')) pageFilter = trigger.getAttribute('data-filter-page');
+      if (trigger.hasAttribute('data-filter-viewport')) viewportFilter.value = trigger.getAttribute('data-filter-viewport');
+      applyFilters();
+      scrollToId('issues');
     });
 
-    async function copyText(text, button) {
-      let copied = false;
-      try {
-        if (navigator.clipboard?.writeText) {
-          await navigator.clipboard.writeText(text);
-          copied = true;
-        }
-      } catch {}
-      if (!copied) {
-        const area = document.createElement('textarea');
-        area.value = text; area.setAttribute('readonly', ''); area.style.position = 'fixed'; area.style.opacity = '0';
-        document.body.appendChild(area); area.select(); copied = document.execCommand('copy'); area.remove();
-      }
-      if (copied) {
-        const original = button.textContent;
-        button.textContent = 'Copied'; button.classList.add('copied');
-        window.setTimeout(() => { button.textContent = original; button.classList.remove('copied'); }, 1400);
-      }
-    }
-
-    document.querySelectorAll('[data-copy-text]').forEach((button) => button.addEventListener('click', () => {
-      copyText(button.getAttribute('data-copy-text') || '', button);
-    }));
-
-    function visibleIssues() {
-      return issueCards.filter((card) => card.style.display !== 'none').map((card) => ({
-        id: card.querySelector('.issue-id')?.textContent || '',
-        severity: card.dataset.severity || '', category: card.dataset.category || '', viewport: card.dataset.viewport || '',
-        issue: card.querySelector('h3')?.textContent || '', search: card.dataset.search || '',
-        target: card.querySelector('.issue-meta-grid div:nth-child(3) span')?.textContent || '',
-        selector: card.querySelector('.issue-meta-grid div:nth-child(4) span')?.textContent || '',
-        url: card.querySelector('.issue-meta-grid div:first-child span')?.textContent || '',
-        recommendation: card.querySelector('.recommendation-box')?.textContent || '', runId: reportRunId
-      }));
-    }
-
-    function downloadFile(name, content, type) {
-      const blob = new Blob([content], { type }); const url = URL.createObjectURL(blob); const link = document.createElement('a');
-      link.href = url; link.download = name; link.click(); URL.revokeObjectURL(url);
-    }
-
-    document.getElementById('exportJson').addEventListener('click', () => downloadFile('website-audit-filtered.json', JSON.stringify({ runId: reportRunId, findings: visibleIssues() }, null, 2), 'application/json'));
-
-    document.querySelectorAll('[data-page-url]').forEach((link) => link.addEventListener('click', (event) => {
-      event.preventDefault(); searchInput.value = link.getAttribute('data-page-url') || ''; applyFilters();
-      document.querySelector('.issues-panel')?.scrollIntoView({ behavior: 'smooth' });
-    }));
-
-    document.querySelectorAll('.field-toggle').forEach((button) => button.addEventListener('click', () => {
-      const value = button.previousElementSibling;
-      const expanded = button.getAttribute('aria-expanded') === 'true';
-      if (value) value.classList.toggle('expanded', !expanded);
-      button.setAttribute('aria-expanded', String(!expanded));
-      button.textContent = expanded ? 'View more' : 'View less';
-    }));
-
-    const savedTheme = localStorage.getItem('audit-theme');
-    if (savedTheme) document.documentElement.dataset.theme = savedTheme;
-    else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) document.documentElement.dataset.theme = 'dark';
-    document.getElementById('themeToggle').addEventListener('click', () => {
-      const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
-      document.documentElement.dataset.theme = next; localStorage.setItem('audit-theme', next);
+    // Expand or collapse every issue card.
+    var toggleAll = document.getElementById('toggleAll');
+    toggleAll.addEventListener('click', function () {
+      var open = toggleAll.textContent === 'Expand all';
+      document.querySelectorAll('.issue > details').forEach(function (details) { details.open = open; });
+      toggleAll.textContent = open ? 'Collapse all' : 'Expand all';
+    });
+    window.addEventListener('beforeprint', function () {
+      document.querySelectorAll('.issue > details').forEach(function (details) { details.open = true; });
     });
 
-    function openEvidence(src, type, title) {
-      const safeSrc = src;
-      const media = type === 'video'
-        ? '<video controls autoplay muted playsinline><source src="' + safeSrc + '" /></video>'
-        : '<img src="' + safeSrc + '" alt="' + title + '" />';
-      modalBody.innerHTML = '<div class="modal-header"><h3>' + title + '</h3></div><div class="modal-media">' + media + '</div>';
+    // Copy buttons
+    function copyText(text, button) {
+      function done() {
+        var original = button.textContent;
+        button.textContent = 'Copied';
+        window.setTimeout(function () { button.textContent = original; }, 1400);
+      }
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done, function () {});
+        return;
+      }
+      var area = document.createElement('textarea');
+      area.value = text; area.setAttribute('readonly', ''); area.style.position = 'fixed'; area.style.opacity = '0';
+      document.body.appendChild(area); area.select();
+      if (document.execCommand('copy')) done();
+      area.remove();
+    }
+    document.querySelectorAll('[data-copy-text]').forEach(function (button) {
+      button.addEventListener('click', function () { copyText(button.getAttribute('data-copy-text') || '', button); });
+    });
+
+    // Export the issues that are currently shown.
+    document.getElementById('exportJson').addEventListener('click', function () {
+      var findings = issueCards.filter(function (card) { return !card.hidden; }).map(function (card) {
+        return {
+          ids: (card.dataset.ids || '').split(' ').filter(Boolean),
+          severity: card.dataset.severity, category: card.dataset.category, page: card.dataset.page,
+          viewports: (card.dataset.viewports || '').split('|').filter(Boolean),
+          issue: card.dataset.title, recommendation: card.dataset.fix, runId: reportRunId
+        };
+      });
+      var blob = new Blob([JSON.stringify({ runId: reportRunId, issues: findings }, null, 2)], { type: 'application/json' });
+      var link = document.createElement('a');
+      link.href = URL.createObjectURL(blob); link.download = 'website-audit-filtered.json'; link.click();
+      URL.revokeObjectURL(link.href);
+    });
+
+    // Evidence viewer. Titles are set as text so crawled content can never become markup.
+    var modal = document.getElementById('evidenceModal');
+    var modalTitle = document.getElementById('modalTitle');
+    var modalBody = document.getElementById('modalBody');
+    var lastTrigger = null;
+    function openEvidence(trigger) {
+      lastTrigger = trigger;
+      var media = document.createElement(trigger.getAttribute('data-evidence-type') === 'video' ? 'video' : 'img');
+      media.src = trigger.getAttribute('data-evidence-src') || '';
+      if (media.tagName === 'VIDEO') { media.controls = true; media.muted = true; media.playsInline = true; }
+      else media.alt = trigger.getAttribute('data-evidence-title') || 'Evidence';
+      modalTitle.textContent = trigger.getAttribute('data-evidence-title') || 'Evidence';
+      modalBody.textContent = '';
+      modalBody.appendChild(media);
       modal.classList.add('visible');
       modal.setAttribute('aria-hidden', 'false');
+      modal.querySelector('.modal-close').focus();
     }
-
     function closeEvidence() {
+      if (!modal.classList.contains('visible')) return;
       modal.classList.remove('visible');
       modal.setAttribute('aria-hidden', 'true');
-      modalBody.innerHTML = '';
+      modalBody.textContent = '';
+      if (lastTrigger) lastTrigger.focus();
     }
-
-    document.querySelectorAll('[data-evidence-src]').forEach((button) => {
-      button.addEventListener('click', () => {
-        const src = button.getAttribute('data-evidence-src');
-        const type = button.getAttribute('data-evidence-type');
-        const title = button.getAttribute('data-evidence-title');
-        openEvidence(src, type, title);
-      });
+    document.querySelectorAll('[data-evidence-src]').forEach(function (button) {
+      button.addEventListener('click', function () { openEvidence(button); });
     });
+    modal.querySelector('.modal-close').addEventListener('click', closeEvidence);
+    modal.addEventListener('click', function (event) { if (event.target === modal) closeEvidence(); });
+    document.addEventListener('keydown', function (event) { if (event.key === 'Escape') closeEvidence(); });
 
-    modalClose.addEventListener('click', closeEvidence);
-    modal.addEventListener('click', (event) => {
-      if (event.target === modal) closeEvidence();
-    });
     applyFilters();
-    document.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape') closeEvidence();
-    });
+  })();
   </script>
 </body>
 </html>`;
     fs.writeFileSync(path.join(outputDir, fileName), html, 'utf-8');
   }
 
-  private issueHtml(issue: AuditIssue, outputDir: string, fallbackEvidence: ScreenshotEvidence[]): string {
+  /** The engine reports each page/viewport pair separately; one card per problem keeps the report readable. */
+  private groupIssues(issues: AuditIssue[]): AuditIssue[][] {
+    const groups = new Map<string, AuditIssue[]>();
+    for (const issue of issues) {
+      const key = [issue.severity, issue.category, issue.url, issue.description].join('\u0000');
+      groups.set(key, [...(groups.get(key) ?? []), issue]);
+    }
+    return Array.from(groups.values());
+  }
+
+  private issueGroupHtml(
+    group: AuditIssue[],
+    index: number,
+    outputDir: string,
+    results: AuditResult[],
+    executionIndex: Map<string, number>
+  ): string {
+    const first = group[0];
+    const viewports = Array.from(new Set(group.map((issue) => issue.viewport)));
+    const selectors = Array.from(new Set(group.map((issue) => issue.selector).filter((value): value is string => Boolean(value))));
+    const { title, summary } = this.splitTitle(first.description);
+    const expected = first.expected ?? `No ${first.category.toLowerCase()} defect should be present.`;
+    const actual = this.splitMeasuredDetails(first.actual ?? first.description);
+    const where = viewports.length <= 2 ? viewports.join(' and ') : `${viewports.length} viewports`;
+    const severityClass = first.severity.toLowerCase();
+    const search = group
+      .map((issue) => `${issue.category} ${issue.severity} ${issue.url} ${issue.viewport} ${issue.description} ${issue.selector ?? ''} ${issue.id}`)
+      .join(' ');
+
+    const viewportLinks = viewports
+      .map((viewport) => {
+        const row = executionIndex.get(`${first.url}\u0000${viewport}`);
+        return row === undefined
+          ? `<span class="chip">${this.escape(viewport)}</span>`
+          : `<a class="chip" href="#exec-${row}" title="Go to this page execution">${this.escape(viewport)}</a>`;
+      })
+      .join('');
+
+    // One evidence row per viewport; a viewport can hold several findings of this issue (one per selector).
+    const evidenceByViewport = new Map<string, ReturnType<HtmlReportGenerator['issueEvidence']>>();
+    for (const issue of group) {
+      const items = evidenceByViewport.get(issue.viewport) ?? [];
+      for (const item of this.issueEvidence(issue, outputDir, results)) {
+        if (!items.some((existing) => existing.href === item.href)) items.push(item);
+      }
+      evidenceByViewport.set(issue.viewport, items);
+    }
+    const evidence = Array.from(evidenceByViewport.entries())
+      .filter(([, items]) => items.length > 0)
+      .map(([viewport, items]) => {
+        return `<div class="evidence-group"><h5>${this.escape(viewport)}</h5><div class="evidence-list">${items
+          .map((item) => {
+            const caption = `${title}, ${viewport}`;
+            const size = item.width && item.height ? `, ${item.width} × ${item.height} px` : '';
+            const original = item.sourceHref
+              ? `<button type="button" class="link-button" data-evidence-src="${this.escapeAttr(item.sourceHref)}" data-evidence-type="image" data-evidence-title="${this.escapeAttr(`Original screenshot: ${caption}`)}">Original</button>`
+              : '';
+            return item.video
+              ? `<button type="button" class="thumb thumb-video" data-evidence-src="${this.escapeAttr(item.href)}" data-evidence-type="video" data-evidence-title="${this.escapeAttr(caption)}"><span class="thumb-play">Play video</span><span class="thumb-label">${this.escape(item.label)}</span></button>`
+              : `<span class="thumb-wrap"><button type="button" class="thumb" data-evidence-src="${this.escapeAttr(item.href)}" data-evidence-type="image" data-evidence-title="${this.escapeAttr(caption)}"><img src="${this.escapeAttr(item.href)}" alt="${this.escapeAttr(`${item.label}: ${caption}`)}" loading="lazy"><span class="thumb-label">${this.escape(item.label + size)}</span></button>${original}</span>`;
+          })
+          .join('')}</div></div>`;
+      })
+      .join('');
+
+    const findingRows = group
+      .map(
+        (issue) => `<tr><td><code>${this.escape(issue.id)}</code></td><td>${this.escape(issue.viewport)}</td><td>${this.escape(issue.browser ?? 'Chromium')}</td><td>${this.escape(issue.device ?? issue.viewport)}</td><td>${this.escape(issue.resolution?.label ?? 'Not recorded')}</td><td>${this.escape(issue.timestamp ?? 'Not recorded')}</td></tr>`
+      )
+      .join('');
+    const technical = group
+      .filter((issue) => issue.details)
+      .map((issue) => `<h5>${this.escape(issue.viewport)}</h5><pre>${this.escape(JSON.stringify(issue.details, null, 2))}</pre>`)
+      .join('');
+
+    return `<article class="issue sev-${severityClass}" id="issue-${index + 1}" data-severity="${this.escapeAttr(first.severity)}" data-category="${this.escapeAttr(first.category)}" data-viewports="|${this.escapeAttr(viewports.join('|'))}|" data-page="${this.escapeAttr(first.url)}" data-ids="${this.escapeAttr(group.map((issue) => issue.id).join(' '))}" data-title="${this.escapeAttr(first.description)}" data-fix="${this.escapeAttr(first.suggestedFix)}" data-search="${this.escapeAttr(search)}">
+      <details open>
+        <summary>
+          <span class="severity-badge ${this.escapeAttr(first.severity)}"><i class="sev-mark ${severityClass}" aria-hidden="true"></i>${this.escape(first.severity)}</span>
+          <span class="issue-heading"><span class="issue-title">${this.escape(title)}</span><span class="issue-sub">${this.escape(first.category)} issue in ${this.escape(where)}</span></span>
+          <span class="chevron" aria-hidden="true"></span>
+        </summary>
+        <div class="issue-body">
+          <div class="issue-intro">
+            ${summary ? `<p>${this.escape(summary)}</p>` : ''}
+            <button type="button" class="copy-button" data-copy-text="${this.escapeAttr(first.description)}">Copy title</button>
+          </div>
+          <div class="fix"><strong>How to fix</strong><p>${this.escape(first.suggestedFix)}</p></div>
+          <dl class="compare">
+            <div><dt>Expected</dt><dd>${this.escape(expected)}</dd></div>
+            <div><dt>Actual</dt><dd>${this.escape(actual.text)}</dd></div>
+          </dl>
+          ${actual.details ? `<div class="block"><h4>Measured details</h4><pre>${this.escape(actual.details)}</pre></div>` : ''}
+          <div class="block">
+            <h4>${selectors.length > 1 ? `Selectors (${selectors.length})` : 'Selector'}</h4>
+            ${(selectors.length ? selectors : ['page'])
+              .map((selector) => `<div class="code-row"><code>${this.escape(selector)}</code><button type="button" class="copy-button" data-copy-text="${this.escapeAttr(selector)}">Copy</button></div>`)
+              .join('')}
+          </div>
+          <dl class="facts">
+            <div><dt>Page</dt><dd><a href="${this.escapeAttr(first.url)}" target="_blank" rel="noopener noreferrer">${this.escape(first.url)}</a> <button type="button" class="copy-button" data-copy-text="${this.escapeAttr(first.url)}">Copy</button> <button type="button" class="link-button" data-filter-page="${this.escapeAttr(first.url)}">Only this page</button></dd></div>
+            <div><dt>Target</dt><dd>${this.escape(first.targetName ?? 'N/A')}</dd></div>
+            <div><dt>Viewports</dt><dd class="chips">${viewportLinks}</dd></div>
+          </dl>
+          ${this.buttonDiagnosticHtml(first)}
+          ${evidence ? `<div class="block"><h4>Evidence</h4>${evidence}</div>` : ''}
+          <details class="more">
+            <summary>Browser and finding details (${this.plural(group.length, 'finding')})</summary>
+            <div class="table-wrap"><table><thead><tr><th scope="col">ID</th><th scope="col">Viewport</th><th scope="col">Browser</th><th scope="col">Device</th><th scope="col">Resolution</th><th scope="col">Timestamp</th></tr></thead><tbody>${findingRows}</tbody></table></div>
+            ${technical ? `<h4>Technical details</h4>${technical}` : ''}
+          </details>
+        </div>
+      </details>
+    </article>`;
+  }
+
+  private issueEvidence(
+    issue: AuditIssue,
+    outputDir: string,
+    results: AuditResult[]
+  ): Array<{ href: string; sourceHref?: string; label: string; video: boolean; width?: number; height?: number }> {
+    const fallbackEvidence =
+      results.find(
+        (result) =>
+          result.page.url === issue.url &&
+          result.viewport === issue.viewport &&
+          (!issue.targetName || issue.targetName === result.targetName || issue.targetName === result.page.targetName)
+      )?.screenshots ?? [];
     const issueEvidence = issue.evidenceDetails ?? [];
     const evidencePaths = this.uniquePaths(
-      issue.evidence?.length
-        ? issue.evidence
-        : issue.category === 'Buttons'
-          ? []
-          : fallbackEvidence.map((item) => item.path)
+      issue.evidence?.length ? issue.evidence : issue.category === 'Buttons' ? [] : fallbackEvidence.map((item) => item.path)
     );
-    const evidence = evidencePaths.map((evidencePath) => {
-      const metadata = issueEvidence.find((item) => item.path === evidencePath) ??
-        fallbackEvidence.find((item) => item.path === evidencePath);
-      return { path: evidencePath, sourcePath: metadata?.sourcePath, annotated: metadata?.annotated ?? false, width: metadata?.width, height: metadata?.height };
+    return evidencePaths.map((evidencePath) => {
+      const metadata = issueEvidence.find((item) => item.path === evidencePath) ?? fallbackEvidence.find((item) => item.path === evidencePath);
+      const video = /\.(mp4|webm|mov|ogg)$/i.test(evidencePath);
+      return {
+        href: this.assetHref(outputDir, evidencePath),
+        sourceHref: metadata?.sourcePath ? this.assetHref(outputDir, metadata.sourcePath) : undefined,
+        label: video ? 'Video' : metadata?.annotated ? 'Annotated' : this.screenshotLabel(metadata?.label ?? path.basename(evidencePath, path.extname(evidencePath))),
+        video,
+        width: metadata?.width,
+        height: metadata?.height
+      };
     });
-    const expected = issue.expected ?? `No ${issue.category.toLowerCase()} defect should be present.`;
-    const actual = issue.actual ?? issue.description;
-    const evidenceButtons = evidence.length
-      ? evidence
-          .map((shot) => {
-            const href = this.assetHref(outputDir, shot.path);
-            const isVideo = /\.(mp4|webm|mov|ogg)$/i.test(shot.path);
-            const originalButton = shot.sourcePath
-              ? `<button type="button" class="evidence-button secondary" data-evidence-src="${this.escapeAttr(this.assetHref(outputDir, shot.sourcePath))}" data-evidence-type="image" data-evidence-title="Original evidence for ${this.escapeAttr(issue.description)}" aria-label="Open original evidence">&#128269; Original</button>`
-              : '';
-            return `<div class="evidence-item"><button type="button" class="evidence-button" data-evidence-src="${this.escapeAttr(href)}" data-evidence-type="${isVideo ? 'video' : 'image'}" data-evidence-title="${this.escapeAttr(issue.description)}" aria-label="View ${isVideo ? 'video' : 'annotated'} evidence">&#128269; ${isVideo ? 'View video' : (shot.annotated ? 'View annotated' : 'View evidence')}</button>${originalButton}${shot.width && shot.height ? `<span class="evidence-dimensions">${shot.width} x ${shot.height}px</span>` : ''}</div>`;
-          })
-          .join('')
-      : '';
+  }
 
-    const issueSearch = `${issue.category} ${issue.severity} ${issue.url} ${issue.viewport} ${issue.description} ${issue.selector ?? ''}`;
-    return `<article class="issue-card ${issue.severity}" data-severity="${this.escapeAttr(issue.severity)}" data-category="${this.escapeAttr(issue.category)}" data-viewport="${this.escapeAttr(issue.viewport)}" data-search="${this.escapeAttr(issueSearch)}">
-      <div class="issue-header">
-        <div>
-          <span class="severity-badge ${this.escapeAttr(issue.severity)}">${this.escape(issue.severity)}</span>
-          <span class="category-tag">${this.escape(issue.category)}</span>
-        </div>
-        <span class="issue-id">${this.escape(issue.id)}</span>
-      </div>
-      <div class="issue-title-row"><h3 class="issue-title" title="${this.escapeAttr(issue.description)}">${this.escape(issue.description)}</h3><button type="button" class="copy-button heading-copy" data-copy-text="${this.escapeAttr(issue.description)}" aria-label="Copy issue title" title="Copy issue title">&#128203;</button></div>
-      <div class="issue-meta-grid">
-        ${this.fieldHtml('URL', issue.url, false, true)}
-        ${this.fieldHtml('Viewport', issue.viewport)}
-        ${this.fieldHtml('Target', issue.targetName ?? 'N/A')}
-        ${this.fieldHtml('Selector', issue.selector ?? 'page', false, true)}
-      </div>
-      <div class="issue-detail-grid">
-        ${this.fieldHtml('Expected', expected, true)}
-        ${this.fieldHtml('Actual', actual, true)}
-      </div>
-      ${this.buttonDiagnosticHtml(issue)}
-      <div class="issue-actions" aria-label="Evidence actions">
-        ${evidenceButtons}
-      </div>
-      <details class="browser-details"><summary>Browser details</summary><div class="browser-details-grid">
-        ${this.fieldHtml('Browser', issue.browser ?? 'Chromium')}
-        ${this.fieldHtml('Device', issue.device ?? issue.viewport)}
-        ${this.fieldHtml('Timestamp', issue.timestamp ?? 'Timestamp unavailable')}
-        ${issue.resolution ? this.fieldHtml('Resolution', issue.resolution.label) : ''}
-      </div></details>
-      <div class="recommendation-box"><strong>Recommendation:</strong> ${this.escape(issue.suggestedFix)}</div>
-      ${issue.details ? `<details class="issue-details"><summary>Technical details</summary><pre>${this.escape(JSON.stringify(issue.details, null, 2))}</pre></details>` : ''}
-    </article>`;
+  /** "Clipped Text: Text appears clipped…" becomes a short title plus a summary sentence. */
+  private splitTitle(description: string): { title: string; summary: string | null } {
+    const match = description.match(/^([^:.]{3,48}):\s+(.+)$/s);
+    return match ? { title: match[1].trim(), summary: match[2].trim() } : { title: description, summary: null };
+  }
+
+  /** Separates the engine's "Measured details: {json}" suffix so it can be shown as formatted data. */
+  private splitMeasuredDetails(text: string): { text: string; details: string | null } {
+    const index = text.indexOf('Measured details:');
+    if (index === -1) return { text, details: null };
+    try {
+      const parsed = JSON.parse(text.slice(index + 'Measured details:'.length).trim().replace(/\.$/, '')) as unknown;
+      return { text: text.slice(0, index).trim() || text, details: JSON.stringify(parsed, null, 2) };
+    } catch {
+      return { text, details: null };
+    }
+  }
+
+  private screenshotLabel(label: string): string {
+    const known: Record<string, string> = { 'full-page': 'Full page', 'above-fold': 'Above the fold', header: 'Header', footer: 'Footer' };
+    if (known[label.toLowerCase()]) return known[label.toLowerCase()];
+    const text = label.replace(/^defect-\d+-/i, '').replace(/[-_]+/g, ' ').trim();
+    return text ? text.charAt(0).toUpperCase() + text.slice(1) : label;
+  }
+
+  private plural(count: number, singular: string): string {
+    return `${count} ${count === 1 ? singular : `${singular}s`}`;
   }
 
   private buttonDiagnosticHtml(issue: AuditIssue): string {
@@ -793,13 +977,6 @@ export class HtmlReportGenerator {
     </div>`;
   }
 
-  private fieldHtml(label: string, value: unknown, expandable = false, copyable = false): string {
-    const text = String(value ?? '');
-    const shouldExpand = text.length > 180 || (expandable && text.length > 120);
-    const copyButton = copyable ? `<button type="button" class="copy-button" data-copy-text="${this.escapeAttr(text)}" aria-label="Copy ${this.escapeAttr(label)}" title="Copy ${this.escapeAttr(label)}">&#128203;</button>` : '';
-    return `<div class="parameter-field"><div class="parameter-label"><strong>${this.escape(label)}</strong>${copyButton}</div><p class="parameter-value ${shouldExpand ? 'is-collapsible' : ''}">${this.escape(text)}</p>${shouldExpand ? `<button type="button" class="field-toggle" aria-expanded="false">View more</button>` : ''}</div>`;
-  }
-
   private writeExcelReport(
     outputDir: string,
     fileName: string,
@@ -832,30 +1009,6 @@ export class HtmlReportGenerator {
     fs.writeFileSync(path.join(outputDir, fileName), workbook, 'utf-8');
   }
 
-  private checksHtml(checks: AuditCheck[], outputDir: string): string {
-    if (!checks.length) return '<p>No assertion records were produced by this execution.</p>';
-    return `<div class="check-summary"><strong>${checks.filter((item) => item.result === 'PASS').length} PASS</strong><strong>${checks.filter((item) => item.result === 'FAIL').length} FAIL</strong></div>
-      ${checks.map((check) => `<details class="check ${check.result}" ${check.result === 'FAIL' ? 'open' : ''}>
-        <summary><span class="result">${this.escape(check.result)}</span> ${this.escape(check.component)} — ${this.escape(check.checkName)}</summary>
-        <div class="detail-grid">
-          <div><strong>Severity:</strong> ${this.escape(check.severity)}</div>
-          <div><strong>Timestamp:</strong> ${this.escape(check.timestamp)}</div>
-          <div><strong>Expected:</strong> ${this.escape(check.expected)}</div>
-          <div><strong>Actual:</strong> ${this.escape(check.actual)}</div>
-          <div><strong>Comment:</strong> ${this.escape(check.comment)}</div>
-          ${check.recommendation ? `<div><strong>Recommendation:</strong> ${this.escape(check.recommendation)}</div>` : ''}
-          ${check.selector ? `<div><strong>Element locator:</strong> <code>${this.escape(check.selector)}</code></div>` : ''}
-          ${check.boundingBox ? `<div><strong>Bounding box:</strong> ${this.escape(JSON.stringify(check.boundingBox))}</div>` : ''}
-          ${check.responseStatus !== undefined ? `<div><strong>Response status:</strong> ${check.responseStatus}</div>` : ''}
-          <div><strong>Page:</strong> <a href="${this.escapeAttr(check.url)}">${this.escape(check.url)}</a></div>
-          <div><strong>Viewport:</strong> ${this.escape(check.viewport)}</div>
-          ${check.resolution ? `<div><strong>Test viewport:</strong> ${this.resolutionHtml(check.resolution)}</div>` : ''}
-        </div>
-        ${check.evidence?.length ? `<div class="shots">${this.uniquePaths(check.evidence).map((shot) => { const href = this.assetHref(outputDir, shot); return `<a href="${this.escapeAttr(href)}"><img src="${this.escapeAttr(href)}" alt="Evidence for ${this.escapeAttr(check.checkName)}" loading="lazy"></a>`; }).join('')}</div>` : ''}
-        ${check.consoleLogs?.length ? `<pre>${this.escape(check.consoleLogs.join('\n'))}</pre>` : ''}
-      </details>`).join('')}`;
-  }
-
   private uniquePaths(paths: string[]): string[] {
     return Array.from(new Set(paths.filter(Boolean)));
   }
@@ -864,146 +1017,256 @@ export class HtmlReportGenerator {
     return `<style>
     :root {
       color-scheme: light;
-      --critical:#b91c1c; --high:#d97706; --medium:#2563eb; --low:#475569;
-      --bg:#f3f6fb; --panel:#ffffff; --line:#dfe7f1; --text:#0f172a; --muted:#475569; --shadow:0 18px 44px rgba(15, 23, 42, 0.08);
+      --bg:#f3f5f8; --panel:#ffffff; --sunken:#f7f8fb; --line:#dee3ea; --line-strong:#c4ccd8;
+      --text:#172033; --text-2:#454f62; --muted:#5f6a7d; --bar:#141f35;
+      --accent:#2d436d; --accent-ink:#2c4a88; --accent-soft:#e8edf6;
+      --critical:#d03b3b; --high:#ec835a; --medium:#fab219; --low:#3987e5;
+      --success:#1e6b45; --success-soft:#e4f3ea; --warning:#804e00; --warning-soft:#fdf3db; --danger:#a12a2a; --danger-soft:#fbe9e9;
+      --radius:12px; --radius-sm:8px;
+    }
+    [data-theme="dark"] {
+      color-scheme: dark;
+      --bg:#0d121c; --panel:#141b28; --sunken:#101621; --line:#273246; --line-strong:#3c4a63;
+      --text:#e7ecf3; --text-2:#b8c2d1; --muted:#919cae; --bar:#111825;
+      --accent:#4a689f; --accent-ink:#a0b8e4; --accent-soft:#1e2a40;
+      --success:#7bd3a2; --success-soft:#12301f; --warning:#f2c66b; --warning-soft:#3a2c0e; --danger:#f29b9b; --danger-soft:#3b1717;
     }
     * { box-sizing:border-box; }
-    body { margin:0; font-family: Inter, Arial, sans-serif; background:linear-gradient(180deg,#edf4ff,#f8fafc); color:var(--text); }
-    a { color:#0f4c81; text-decoration:none; }
+    html { scroll-padding-top:72px; }
+    body { margin:0; background:var(--bg); color:var(--text); font-family:"Segoe UI", system-ui, -apple-system, Roboto, "Helvetica Neue", Arial, sans-serif; font-size:16px; line-height:1.6; -webkit-font-smoothing:antialiased; }
+    a { color:var(--accent-ink); text-underline-offset:2px; }
     a:hover { text-decoration:underline; }
-    .page-shell { max-width:1500px; margin:0 auto; padding:24px; }
-    .topbar { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; background:rgba(15,23,42,0.96); color:#fff; border-radius:16px; padding:22px 24px; box-shadow:var(--shadow); }
-    .eyebrow { font-size:12px; text-transform:uppercase; letter-spacing:1.8px; opacity:0.75; margin-bottom:10px; }
-    h1 { margin:0; font-size:32px; }
-    .topbar-meta { text-align:right; font-size:12px; color:#dfe7f1; }
-    .dashboard-main { margin-top:22px; }
-    .insights-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:18px; margin-bottom:22px; }
-    .insight-card { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:18px; box-shadow:var(--shadow); }
-    .section-kicker { color:var(--muted); font-size:11px; font-weight:800; letter-spacing:.12em; text-transform:uppercase; }
-    .bar-chart { display:grid; gap:11px; margin-top:18px; }
-    .bar-row { display:grid; grid-template-columns:72px 1fr 36px; align-items:center; gap:10px; font-size:12px; }
-    .bar-track { height:10px; overflow:hidden; border-radius:99px; background:color-mix(in srgb, var(--line) 70%, transparent); }
-    .bar-fill { display:block; height:100%; min-width:4px; border-radius:99px; }
-    .bar-fill.critical { background:#ef4444; } .bar-fill.high { background:#f59e0b; } .bar-fill.medium { background:#3b82f6; } .bar-fill.low { background:#64748b; }
-    .chart-table { display:flex; flex-wrap:wrap; gap:8px 16px; margin-top:16px; color:var(--muted); font-size:12px; }
-    .trend-chart { display:flex; align-items:end; gap:12px; height:130px; margin-top:16px; padding:10px 4px 0; border-bottom:1px solid var(--line); }
-    .trend-column { display:flex; flex:1; min-width:20px; height:100%; flex-direction:column; justify-content:end; align-items:center; gap:5px; }
-    .trend-column i { width:100%; min-height:4px; border-radius:6px 6px 0 0; background:linear-gradient(180deg,#38bdf8,#2563eb); }
-    .trend-column span, .trend-value { color:var(--muted); font-size:10px; }
-    .chart-note { color:var(--muted); font-size:12px; margin:14px 0 0; }
-    .empty-chart { min-height:130px; display:grid; place-items:center; color:var(--muted); font-size:13px; }
-    .summary-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:14px; margin-bottom:22px; }
-    .metric { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:18px 16px; box-shadow:var(--shadow); }
-    .metric span { display:block; font-size:12px; color:var(--muted); text-transform:capitalize; margin-bottom:8px; }
-    .metric strong { font-size:28px; line-height:1.2; }
-    .status-panel { display:flex; justify-content:space-between; align-items:center; gap:16px; padding:16px 18px; margin:0 0 24px; border-radius:12px; border:1px solid var(--line); box-shadow:var(--shadow); }
-    .status-panel.failed { background:#fff1f2; color:#7f1d1d; border-color:#fecdd3; }
-    .status-panel.passed { background:#ecfdf5; color:#166534; border-color:#bbf7d0; }
-    .toolbar { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:14px; background:var(--panel); padding:16px; border-radius:14px; border:1px solid var(--line); box-shadow:var(--shadow); margin-bottom:18px; }
-    .field-group { display:flex; flex-direction:column; gap:8px; }
-    .field-group label { font-size:12px; font-weight:700; color:var(--muted); text-transform:uppercase; letter-spacing:0.08em; }
-    .field-group select, .field-group input { background:#f8fafc; border:1px solid var(--line); border-radius:10px; padding:10px 12px; font-size:14px; color:var(--text); }
-    .toolbar-actions { grid-column:1 / -1; display:flex; align-items:center; justify-content:flex-end; flex-wrap:nowrap; gap:8px; width:100%; min-width:0; max-width:100%; overflow-x:auto; padding-bottom:2px; }
-    .toolbar-actions > * { flex:0 0 auto; white-space:nowrap; }
-    .toolbar-actions button { border:1px solid var(--line); border-radius:10px; padding:10px 12px; background:var(--text); color:var(--panel); cursor:pointer; font-weight:700; min-height:40px; }
-    .toolbar-button { display:inline-flex; align-items:center; border:1px solid var(--line); border-radius:10px; padding:10px 12px; background:#1d4ed8; color:#fff; cursor:pointer; font-weight:700; text-decoration:none; min-height:40px; }
-    .toolbar-actions button:hover { opacity:.86; }
-    .issues-panel { display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:18px; }
-    .issue-card { background:var(--panel); border:1px solid var(--line); border-left:6px solid var(--low); border-radius:16px; padding:18px; box-shadow:var(--shadow); }
-    .issue-card.Critical { border-left-color:var(--critical); }
-    .issue-card.High { border-left-color:var(--high); }
-    .issue-card.Medium { border-left-color:var(--medium); }
-    .issue-card.Low { border-left-color:var(--low); }
-    .issue-header { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:12px; }
-    .severity-badge { display:inline-block; padding:5px 10px; border-radius:999px; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.08em; }
-    .severity-badge.Critical { background:#fee2e2; color:var(--critical); }
-    .severity-badge.High { background:#ffedd5; color:var(--high); }
-    .severity-badge.Medium { background:#dbeafe; color:var(--medium); }
-    .severity-badge.Low { background:#e2e8f0; color:var(--low); }
-    .category-tag { display:inline-block; margin-left:8px; font-size:11px; background:#f8fafc; border:1px solid var(--line); border-radius:999px; padding:5px 8px; color:var(--muted); }
-    .issue-id { font-size:11px; color:var(--muted); }
-    .issue-title-row { display:flex; align-items:flex-start; gap:8px; min-width:0; margin-bottom:12px; }
-    .issue-card h3 { flex:1; min-width:0; margin:0; font-size:20px; line-height:1.35; min-height:54px; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; }
-    .page-index { margin:0 0 22px; }
-    .section-heading { display:flex; justify-content:space-between; align-items:end; gap:12px; }
-    .section-heading h2 { margin:5px 0 0; }
-    .section-heading > span { color:var(--muted); font-size:12px; }
-    .page-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:12px; margin-top:16px; }
-    .page-card { border:1px solid var(--line); border-radius:12px; padding:14px; background:var(--soft); }
-    .page-card-head { display:flex; justify-content:space-between; align-items:center; gap:8px; font-size:12px; }
-    .page-card h3 { margin:12px 0 7px; font-size:15px; }
-    .page-card a { display:block; overflow-wrap:anywhere; font-size:12px; }
-    .page-card p { color:var(--muted); font-size:12px; margin-bottom:0; }
-    .issue-meta-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin-bottom:12px; }
-    .issue-meta-grid div, .issue-detail-grid div { min-width:0; background:#f8fafc; border:1px solid var(--line); border-radius:10px; padding:10px; }
-    .issue-meta-grid strong, .issue-detail-grid strong { display:block; font-size:11px; text-transform:uppercase; letter-spacing:0.08em; color:var(--muted); margin-bottom:6px; }
-    .issue-meta-grid span, .issue-detail-grid p, .issue-footer span, .recommendation-box { display:block; max-width:100%; overflow-wrap:anywhere; word-break:break-word; }
-    .parameter-field { min-width:0; }
-    .parameter-label { display:flex; align-items:center; justify-content:space-between; gap:6px; min-width:0; }
-    .parameter-value { max-height:72px; overflow:hidden; }
-    .parameter-value.is-collapsible { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:3; overflow:hidden; }
-    .parameter-value.is-collapsible.expanded { display:block; max-height:none; overflow:visible; }
-    .field-toggle { margin-top:7px; padding:0; border:0; background:transparent; color:#1d4ed8; cursor:pointer; font-size:12px; font-weight:700; }
-    .copy-button { flex:0 0 auto; width:30px; height:30px; display:inline-grid; place-items:center; border:1px solid var(--line); border-radius:8px; background:var(--panel); color:var(--text); cursor:pointer; font-size:14px; line-height:1; }
-    .copy-button:hover, .copy-button:focus-visible { border-color:#38bdf8; color:#0369a1; }
-    .copy-button.copied { background:#dcfce7; border-color:#86efac; color:#166534; }
-    .heading-copy { margin-top:1px; }
-    .browser-details { margin-top:12px; border-top:1px solid var(--line); padding-top:10px; }
-    .browser-details summary { cursor:pointer; color:var(--muted); font-size:12px; font-weight:800; }
-    .browser-details-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin-top:10px; }
-    .issue-detail-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin-bottom:12px; }
-    .issue-detail-grid p { margin:0; font-size:14px; line-height:1.6; color:var(--text); }
-    .control-diagnostic { margin:0 0 12px; padding:12px; border:1px solid #fca5a5; border-left:5px solid #ef4444; border-radius:10px; background:#fff7f7; }
-    .control-diagnostic > strong { display:block; margin-bottom:8px; color:#991b1b; }
-    .control-diagnostic dl { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:8px; margin:0; }
-    .control-diagnostic dl div { min-width:0; padding:8px; border:1px solid #fecaca; border-radius:8px; background:#fff; }
-    .control-diagnostic dt { margin-bottom:4px; color:#7f1d1d; font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:.06em; }
-    .control-diagnostic dd { margin:0; overflow-wrap:anywhere; color:var(--text); font-size:12px; }
-    .issue-actions { display:flex; flex-wrap:wrap; align-items:flex-start; gap:8px; min-width:0; }
-    .evidence-item { display:flex; flex-wrap:wrap; align-items:center; gap:6px; max-width:100%; }
-    .evidence-button { background:#0f172a; color:#fff; border:1px solid #0f172a; border-radius:10px; padding:10px 12px; font-weight:700; cursor:pointer; white-space:nowrap; }
-    .evidence-button.secondary { background:transparent; color:var(--text); border-color:var(--line); }
-    .evidence-button:focus-visible, .modal-close:focus-visible { outline:3px solid #38bdf8; outline-offset:2px; }
-    .evidence-dimensions { color:var(--muted); font-size:11px; }
-    .recommendation-box { margin-top:12px; background:#fef3c7; border:1px solid #fcd34d; border-radius:10px; padding:10px 12px; color:#7c4701; font-size:13px; }
-    .issue-details { margin-top:12px; min-width:0; }
-    .issue-details summary { cursor:pointer; color:var(--muted); font-size:12px; font-weight:700; }
-    pre { white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; background:#f8fafc; border:1px solid var(--line); border-radius:10px; padding:10px; max-height:260px; max-width:100%; overflow:auto; margin-top:12px; line-height:1.5; }
-    .empty-state { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:24px; color:var(--muted); box-shadow:var(--shadow); }
-    .report-shell { margin-top:30px; background:var(--panel); border-radius:14px; border:1px solid var(--line); box-shadow:var(--shadow); padding:20px; }
-    .shots { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:10px; max-width:100%; margin-top:12px; }
-    .shots a { display:block; min-width:0; overflow:hidden; border:1px solid var(--line); border-radius:10px; background:var(--soft); }
-    .shots img { display:block; width:100%; height:140px; object-fit:contain; }
-    table { width:100%; border-collapse:collapse; margin-top:12px; }
-    th, td { padding:10px 12px; border-bottom:1px solid var(--line); text-align:left; font-size:13px; }
-    th { background:#eef2f7; }
-    .modal { position:fixed; inset:0; display:none; align-items:center; justify-content:center; background:rgba(15,23,42,0.7); z-index:50; }
+    h1, h2, h3, h4, h5 { color:var(--text); line-height:1.3; margin:0; }
+    code, pre { font-family:ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; font-size:13px; }
+    button, input, select { font:inherit; }
+    :focus-visible { outline:3px solid var(--accent-ink); outline-offset:2px; }
+    .wrap { max-width:1200px; margin:0 auto; padding:0 24px; }
+    .skip-link { position:absolute; left:-999px; top:8px; background:var(--panel); padding:8px 12px; border-radius:var(--radius-sm); z-index:60; }
+    .skip-link:focus { left:16px; }
+
+    .report-header { background:var(--bar); color:#fff; padding:20px 0 32px; }
+    .header-top { display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; }
+    .brand { display:flex; align-items:center; gap:12px; font-weight:600; }
+    .logo { display:inline-grid; place-items:center; width:32px; height:32px; border-radius:var(--radius-sm); background:#fff; color:#1d2c47; font-size:12px; font-weight:700; }
+    .header-actions { display:flex; align-items:center; gap:20px; margin-left:auto; }
+    .header-title { margin-top:28px; }
+    .header-title h1 { color:#fff; font-size:32px; letter-spacing:-0.01em; }
+    .header-title p { margin:8px 0 0; color:rgba(255,255,255,.72); }
+    .theme-switch { display:inline-flex; align-items:center; gap:10px; font-size:14px; color:rgba(255,255,255,.85); }
+    #themeToggle { position:relative; width:46px; height:26px; padding:0; border-radius:999px; border:1px solid rgba(255,255,255,.35); background:rgba(255,255,255,.12); cursor:pointer; }
+    #themeToggle .knob { position:absolute; top:3px; left:3px; width:18px; height:18px; border-radius:50%; background:#fff; transition:transform .2s ease; }
+    #themeToggle[aria-checked="true"] { background:#4a689f; border-color:#7d97c8; }
+    #themeToggle[aria-checked="true"] .knob { transform:translateX(20px); }
+
+    .section-nav { position:sticky; top:0; z-index:40; background:var(--panel); border-bottom:1px solid var(--line); }
+    .section-nav .wrap { display:flex; gap:4px; overflow-x:auto; }
+    .section-nav a { display:inline-flex; align-items:center; gap:8px; padding:14px 14px 12px; color:var(--text-2); font-weight:600; font-size:15px; white-space:nowrap; text-decoration:none; border-bottom:3px solid transparent; }
+    .section-nav a:hover { color:var(--text); border-bottom-color:var(--line-strong); text-decoration:none; }
+    .nav-count { padding:0 8px; border-radius:999px; background:var(--accent-soft); color:var(--accent-ink); font-size:13px; }
+
+    .section { padding-top:48px; }
+    .section-heading { display:flex; flex-wrap:wrap; align-items:baseline; justify-content:space-between; gap:4px 24px; margin-bottom:20px; }
+    .section-heading h2 { font-size:24px; }
+    .section-heading p { margin:0; color:var(--muted); font-size:15px; }
+    .panel { background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); padding:24px; }
+    .panel h3 { font-size:17px; }
+
+    .button { display:inline-flex; align-items:center; justify-content:center; min-height:40px; padding:8px 16px; border:1px solid var(--line-strong); border-radius:var(--radius-sm); background:var(--panel); color:var(--text); font-size:14px; font-weight:600; cursor:pointer; text-decoration:none; white-space:nowrap; }
+    .button:hover { background:var(--sunken); text-decoration:none; }
+    .button-light { background:#fff; color:#1d2c47; border-color:#fff; }
+    .button-light:hover { background:#e8edf6; }
+    .link-button { padding:0; border:0; background:none; color:var(--accent-ink); font-weight:600; cursor:pointer; text-align:left; }
+    .link-button:hover { text-decoration:underline; }
+    .copy-button { padding:2px 10px; border:1px solid var(--line); border-radius:6px; background:var(--panel); color:var(--text-2); font-size:13px; font-weight:600; cursor:pointer; }
+    .copy-button:hover { border-color:var(--line-strong); color:var(--text); }
+
+    .summary-grid { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:12px; }
+    .metric { display:flex; flex-direction:column; gap:4px; padding:18px 20px; background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); color:var(--text); text-decoration:none; transition:border-color .15s ease; }
+    .metric:hover { border-color:var(--accent-ink); text-decoration:none; }
+    .metric-label { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:14px; }
+    .metric-value { font-size:28px; font-weight:700; line-height:1.2; font-variant-numeric:tabular-nums; }
+    .metric-value small { font-size:15px; font-weight:500; color:var(--muted); }
+    .metric-status .metric-value { font-size:20px; }
+    .metric-hint { color:var(--accent-ink); font-size:13px; font-weight:600; opacity:0; transition:opacity .15s ease; }
+    .metric:hover .metric-hint, .metric:focus-visible .metric-hint { opacity:1; }
+
+    .sev-mark { display:inline-block; width:12px; height:12px; border-radius:3px; flex:0 0 auto; }
+    .sev-mark.critical { background:var(--critical); } .sev-mark.high { background:var(--high); } .sev-mark.medium { background:var(--medium); } .sev-mark.low { background:var(--low); }
+
+    .insights-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; margin-top:16px; }
+    .bar-chart { display:grid; gap:4px; margin-top:16px; }
+    .bar-row { display:grid; grid-template-columns:110px 1fr 44px; align-items:center; gap:12px; padding:8px; margin:0 -8px; border:0; border-radius:var(--radius-sm); background:none; color:var(--text); text-align:left; cursor:pointer; }
+    .bar-row:hover { background:var(--sunken); }
+    .bar-label { display:flex; align-items:center; gap:8px; font-weight:600; font-size:15px; }
+    .bar-track { height:10px; overflow:hidden; border-radius:99px; background:var(--sunken); box-shadow:inset 0 0 0 1px var(--line); }
+    .bar-fill { display:block; height:100%; border-radius:99px; }
+    .bar-fill.critical { background:var(--critical); } .bar-fill.high { background:var(--high); } .bar-fill.medium { background:var(--medium); } .bar-fill.low { background:var(--low); }
+    .bar-row strong { text-align:right; font-variant-numeric:tabular-nums; }
+    .chart-note { margin:16px 0 0; color:var(--muted); font-size:14px; }
+    .trend-chart { display:flex; align-items:flex-end; gap:10px; height:150px; margin-top:16px; padding-top:8px; border-bottom:1px solid var(--line); }
+    .trend-column { display:flex; flex:1; min-width:24px; height:100%; flex-direction:column; justify-content:flex-end; align-items:center; gap:6px; }
+    .trend-column i { width:100%; max-width:44px; min-height:4px; border-radius:4px 4px 0 0; background:var(--accent); }
+    .trend-value { color:var(--text-2); font-size:13px; font-weight:600; }
+    .trend-label { color:var(--muted); font-size:11px; white-space:nowrap; padding-bottom:4px; }
+    .empty-chart { min-height:150px; display:grid; place-items:center; margin:16px 0 0; color:var(--muted); text-align:center; }
+
+    .status-panel { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:8px 16px; margin-top:16px; padding:14px 20px; border-radius:var(--radius); border:1px solid var(--line); font-size:15px; }
+    .status-panel.failed { background:var(--danger-soft); color:var(--danger); }
+    .status-panel.passed { background:var(--success-soft); color:var(--success); }
+    .status-panel.off { background:var(--panel); color:var(--text-2); }
+
+    .page-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:12px; }
+    .page-card { display:flex; flex-direction:column; gap:6px; padding:18px 20px; background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); color:var(--text); text-align:left; cursor:pointer; }
+    .page-card:hover { border-color:var(--accent-ink); }
+    .page-card-head { display:flex; justify-content:space-between; align-items:center; gap:8px; }
+    .page-count { color:var(--text-2); font-size:14px; font-weight:600; }
+    .page-title { font-size:17px; font-weight:600; }
+    .page-url { color:var(--accent-ink); font-size:14px; overflow-wrap:anywhere; }
+    .page-meta { color:var(--muted); font-size:14px; }
+
+    .severity-badge { display:inline-flex; align-items:center; gap:8px; font-size:14px; font-weight:700; color:var(--text); white-space:nowrap; }
+    .severity-badge.Pass { color:var(--success); }
+
+    .toolbar { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)) minmax(0,1.4fr); gap:16px; padding:20px; }
+    .field { display:flex; flex-direction:column; gap:6px; min-width:0; }
+    .field label { font-size:14px; font-weight:600; color:var(--text); }
+    .field select, .field input { height:44px; padding:8px 12px; border:1px solid var(--line-strong); border-radius:var(--radius-sm); background:var(--panel); color:var(--text); font-size:15px; }
+    .toolbar-actions { grid-column:1 / -1; display:flex; flex-wrap:wrap; justify-content:flex-end; gap:8px; padding-top:16px; border-top:1px solid var(--line); }
+    .result-bar { display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin:20px 0 12px; }
+    .result-bar p { margin:0; color:var(--text-2); font-weight:600; }
+    .filter-chip { padding:4px 12px; border:1px solid var(--accent-ink); border-radius:999px; background:var(--accent-soft); color:var(--accent-ink); font-size:14px; font-weight:600; cursor:pointer; overflow-wrap:anywhere; text-align:left; }
+
+    .issue-list { display:grid; gap:16px; }
+    .issue { background:var(--panel); border:1px solid var(--line); border-left:5px solid var(--low); border-radius:var(--radius); }
+    .issue.sev-critical { border-left-color:var(--critical); } .issue.sev-high { border-left-color:var(--high); } .issue.sev-medium { border-left-color:var(--medium); }
+    .issue > details > summary { display:grid; grid-template-columns:110px minmax(0,1fr) auto; align-items:start; gap:16px; padding:18px 24px; cursor:pointer; list-style:none; }
+    .issue > details > summary::-webkit-details-marker { display:none; }
+    .issue > details > summary:hover { background:var(--sunken); border-radius:var(--radius); }
+    .issue-heading { display:flex; flex-direction:column; gap:2px; min-width:0; }
+    .issue-title { font-size:18px; font-weight:600; color:var(--text); }
+    .issue-sub { color:var(--muted); font-size:14px; }
+    .chevron { width:10px; height:10px; margin-top:8px; border-right:2px solid var(--muted); border-bottom:2px solid var(--muted); transform:rotate(45deg); transition:transform .15s ease; }
+    .issue > details[open] > summary .chevron { transform:rotate(225deg); margin-top:12px; }
+    .issue-body { display:grid; gap:20px; padding:0 24px 24px 150px; }
+    .issue-intro { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; }
+    .issue-intro p { margin:0; color:var(--text-2); max-width:72ch; }
+    .issue-intro .copy-button { margin-left:auto; }
+    .fix { padding:14px 18px; border-left:4px solid var(--accent); border-radius:var(--radius-sm); background:var(--accent-soft); }
+    .fix strong { display:block; color:var(--accent-ink); font-size:14px; }
+    .fix p { margin:2px 0 0; max-width:72ch; }
+    .compare { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:20px; margin:0; }
+    dt { color:var(--muted); font-size:14px; }
+    dd { margin:2px 0 0; overflow-wrap:anywhere; }
+    .block h4 { font-size:14px; font-weight:600; color:var(--muted); margin-bottom:8px; }
+    .block h5, .more h5 { font-size:14px; font-weight:600; margin:12px 0 8px; }
+    .code-row { display:flex; align-items:flex-start; gap:8px; margin-top:6px; }
+    .code-row code { flex:1; min-width:0; padding:8px 12px; border-radius:var(--radius-sm); background:var(--sunken); border:1px solid var(--line); color:var(--text-2); overflow-wrap:anywhere; }
+    pre { margin:0; padding:12px 16px; max-height:280px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; border-radius:var(--radius-sm); background:var(--sunken); border:1px solid var(--line); color:var(--text-2); line-height:1.5; }
+    .facts { display:grid; gap:10px; margin:0; padding:16px 0; border-top:1px solid var(--line); border-bottom:1px solid var(--line); }
+    .facts > div { display:grid; grid-template-columns:110px minmax(0,1fr); gap:12px; align-items:baseline; }
+    .facts dd { margin:0; }
+    .chips { display:flex; flex-wrap:wrap; gap:6px; }
+    .chip, .chip-button { display:inline-flex; align-items:center; padding:2px 10px; border:1px solid var(--line); border-radius:6px; background:var(--sunken); color:var(--text-2); font-size:13px; font-weight:600; text-decoration:none; white-space:nowrap; }
+    a.chip:hover, .chip-button:hover { border-color:var(--accent-ink); color:var(--accent-ink); text-decoration:none; cursor:pointer; }
+
+    .evidence-group + .evidence-group { margin-top:8px; }
+    .evidence-list { display:flex; flex-wrap:wrap; gap:12px; }
+    .thumb-wrap { display:flex; flex-direction:column; gap:4px; align-items:flex-start; }
+    .thumb { display:flex; flex-direction:column; width:168px; padding:0; overflow:hidden; border:1px solid var(--line); border-radius:var(--radius-sm); background:var(--panel); color:var(--text); text-align:left; cursor:zoom-in; }
+    .thumb:hover { border-color:var(--accent-ink); }
+    .thumb img { display:block; width:100%; height:100px; object-fit:cover; object-position:top; background:var(--sunken); }
+    .thumb-label { padding:6px 10px; border-top:1px solid var(--line); color:var(--text-2); font-size:12px; font-weight:600; }
+    .thumb-video { cursor:pointer; }
+    .thumb-play { display:grid; place-items:center; height:100px; background:var(--sunken); font-weight:600; }
+    .thumb-wrap .link-button, .facts .link-button { font-size:14px; }
+    .facts .link-button { margin-left:8px; }
+
+    .control-diagnostic { padding:16px; border:1px solid var(--line); border-left:4px solid var(--critical); border-radius:var(--radius-sm); background:var(--danger-soft); }
+    .control-diagnostic > strong { display:block; margin-bottom:10px; color:var(--danger); }
+    .control-diagnostic dl { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:10px 20px; margin:0; }
+    .control-diagnostic dd { color:var(--text); font-size:14px; }
+
+    .more { border-top:1px solid var(--line); padding-top:12px; }
+    .more > summary { cursor:pointer; color:var(--text-2); font-size:14px; font-weight:600; }
+    .more h4 { font-size:14px; color:var(--muted); margin:16px 0 0; }
+    .more .table-wrap { margin-top:12px; }
+
+    .table-wrap { overflow-x:auto; }
+    .table-wrap.panel { padding:0; }
+    table { width:100%; border-collapse:collapse; }
+    th, td { padding:12px 16px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; font-size:14px; }
+    thead th { background:var(--sunken); color:var(--text-2); font-weight:600; white-space:nowrap; }
+    tbody tr:last-child td { border-bottom:0; }
+    tbody tr:target { background:var(--accent-soft); }
+    .cell-url { min-width:200px; overflow-wrap:anywhere; }
+    .nowrap { white-space:nowrap; }
+    .shot-links { display:flex; flex-wrap:wrap; gap:6px; max-width:420px; }
+    td small { display:block; color:var(--muted); }
+
+    .empty-state { padding:32px; border:1px dashed var(--line-strong); border-radius:var(--radius); color:var(--muted); text-align:center; }
+
+    .modal { position:fixed; inset:0; display:none; align-items:center; justify-content:center; padding:16px; background:rgba(11,17,28,.82); z-index:50; }
     .modal.visible { display:flex; }
-    .modal-content { position:relative; width:min(1200px, calc(100vw - 32px)); max-height:92vh; overflow:auto; background:var(--panel); color:var(--text); border-radius:18px; box-shadow:var(--shadow); padding:22px; }
-    .modal-close { position:absolute; top:10px; right:12px; border:none; background:#0f172a; color:#fff; border-radius:50%; width:32px; height:32px; cursor:pointer; }
-    .modal-header { margin-bottom:16px; }
-    .modal-media { display:flex; justify-content:center; align-items:center; min-height:120px; overflow:auto; background:var(--soft); border:1px solid var(--line); border-radius:12px; padding:12px; }
-    .modal-media img, .modal-media video { display:block; max-width:100%; width:auto; height:auto; max-height:78vh; object-fit:contain; border-radius:8px; background:#f8fafc; }
-    [data-theme="dark"] { color-scheme:dark; --bg:#0b1120; --panel:#111827; --soft:#172033; --line:#293548; --text:#e5e7eb; --muted:#9ca3af; --shadow:0 18px 44px rgba(0,0,0,.24); }
-    [data-theme="dark"] body { background:linear-gradient(180deg,#0b1120,#111827); }
-    [data-theme="dark"] .topbar { background:#020617; }
-    [data-theme="dark"] .field-group select, [data-theme="dark"] .field-group input, [data-theme="dark"] pre { background:#0b1120; color:var(--text); }
-    [data-theme="dark"] .status-panel.failed { background:#2a1118; color:#fecdd3; border-color:#7f1d1d; }
-    [data-theme="dark"] .status-panel.passed { background:#0d281c; color:#bbf7d0; border-color:#166534; }
-    [data-theme="dark"] .recommendation-box { background:#33270d; border-color:#8a6415; color:#fde68a; }
-    [data-theme="dark"] .issue-meta-grid div, [data-theme="dark"] .issue-detail-grid div { background:#172033; }
-    [data-theme="dark"] .control-diagnostic { background:#2a1118; border-color:#7f1d1d; }
-    [data-theme="dark"] .control-diagnostic > strong, [data-theme="dark"] .control-diagnostic dt { color:#fecaca; }
-    [data-theme="dark"] .control-diagnostic dl div { background:#172033; border-color:#7f1d1d; }
-    @media (max-width: 768px) {
-      .page-shell { padding:14px; }
-      .topbar { flex-direction:column; }
-      .issue-meta-grid, .issue-detail-grid { grid-template-columns:1fr; }
-      .browser-details-grid { grid-template-columns:1fr; }
-      .topbar-meta { text-align:left; }
-      .status-panel { flex-direction:column; align-items:flex-start; }
-      .insights-grid { grid-template-columns:1fr; }
-      .toolbar-actions { align-items:center; justify-content:flex-start; width:100%; }
+    .modal-content { width:min(1200px,100%); max-height:94vh; overflow:auto; background:var(--panel); border-radius:var(--radius); padding:20px; }
+    .modal-header { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:16px; }
+    .modal-header h3 { font-size:17px; overflow-wrap:anywhere; }
+    .modal-media { display:flex; justify-content:center; padding:12px; border-radius:var(--radius-sm); background:var(--sunken); }
+    .modal-media img, .modal-media video { display:block; max-width:100%; max-height:78vh; height:auto; object-fit:contain; }
+
+    body > header:not(.report-header), body > main:not(.wrap) { max-width:1200px; margin:0 auto; padding:24px; }
+
+    @media (max-width: 1000px) {
+      .summary-grid { grid-template-columns:repeat(3,minmax(0,1fr)); }
+      .toolbar { grid-template-columns:repeat(2,minmax(0,1fr)); }
+      .issue-body { padding-left:24px; }
+    }
+    @media (max-width: 700px) {
+      .wrap { padding:0 16px; }
+      .header-title h1 { font-size:26px; }
+      .summary-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+      .insights-grid, .compare, .toolbar { grid-template-columns:1fr; }
+      .issue > details > summary { grid-template-columns:minmax(0,1fr) auto; padding:16px; }
+      .issue > details > summary .severity-badge { grid-column:1 / -1; }
+      .issue-body { padding:0 16px 20px; }
+      .facts > div { grid-template-columns:1fr; gap:2px; }
+      .metric-hint { display:none; }
+    }
+    @media (prefers-reduced-motion: reduce) { * { transition:none !important; scroll-behavior:auto !important; } }
+    @media print {
+      :root, [data-theme="dark"] {
+        color-scheme: light;
+        --bg:#ffffff; --panel:#ffffff; --sunken:#f7f8fb; --line:#dee3ea; --line-strong:#c4ccd8;
+        --text:#172033; --text-2:#454f62; --muted:#5f6a7d; --accent:#2d436d; --accent-ink:#2c4a88; --accent-soft:#e8edf6;
+        --success:#1e6b45; --success-soft:#e4f3ea; --danger:#a12a2a; --danger-soft:#fbe9e9;
+      }
+      body { font-size:12pt; }
+      .section-nav, .header-actions, .toolbar, .result-bar, .copy-button, .skip-link, .modal, .metric-hint, .facts .link-button, .thumb-wrap .link-button, .screen-only { display:none !important; }
+      h2, h3, h4, .section-heading, .issue > details > summary { break-after:avoid; page-break-after:avoid; }
+      .metric { padding:10px 12px; }
+      .metric-label { font-size:9pt; line-height:1.3; }
+      .report-header { padding:16px 0 20px; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+      .section { padding-top:24px; break-before:auto; }
+      #issues, #executions { break-before:page; }
+      .panel, .metric, .page-card, .status-panel, .bar-row, .fix, .compare, .thumb, tr { break-inside:avoid; }
+      .issue { break-inside:auto; }
+      .issue > details > summary { break-after:avoid; }
+      .chevron { display:none; }
+      .issue-body { padding-left:24px; }
+      .summary-grid { grid-template-columns:repeat(5,minmax(0,1fr)); }
+      .insights-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+      .metric-value { font-size:18pt; }
+      .metric-status .metric-value { font-size:13pt; }
+      .thumb img { height:90px; }
+      .table-wrap { overflow:visible; }
+      table { table-layout:fixed; }
+      th, td { padding:6px 8px; font-size:8.5pt; overflow-wrap:anywhere; }
+      thead th { white-space:normal; }
+      .shot-links { max-width:none; gap:4px; }
+      .chip-button { white-space:normal; font-size:8pt; padding:1px 6px; }
+      .cell-url { min-width:0; }
+      .exec-table th:nth-child(1) { width:9%; } .exec-table th:nth-child(2) { width:17%; } .exec-table th:nth-child(3) { width:11%; }
+      .exec-table th:nth-child(4) { width:13%; } .exec-table th:nth-child(5) { width:11%; } .exec-table th:nth-child(6) { width:8%; } .exec-table th:nth-child(7) { width:31%; }
+      * { -webkit-print-color-adjust:exact; print-color-adjust:exact; }
     }
   </style>`;
   }
@@ -1027,8 +1290,9 @@ export class HtmlReportGenerator {
     return { Critical: 0, High: 1, Medium: 2, Low: 3 }[severity];
   }
 
+  /** "pagesCrawled" becomes "Pages crawled". */
   private label(key: string): string {
-    return key.replace(/[A-Z]/g, (match) => ` ${match}`).replace(/^./, (match) => match.toUpperCase());
+    return key.replace(/[A-Z]/g, (match) => ` ${match.toLowerCase()}`).replace(/^./, (match) => match.toUpperCase());
   }
 
   private escape(value: unknown): string {

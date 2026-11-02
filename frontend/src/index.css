@@ -1,0 +1,124 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Colour tokens as RGB channels. Dark mode gets its own steps, checked for contrast on its own
+ * surfaces (ink-3 stays above 4.5:1 on surface in both themes), rather than an automatic flip.
+ */
+@layer base {
+  :root {
+    --canvas: 243 245 248;
+    --surface: 255 255 255;
+    --sunken: 247 248 251;
+    --ink: 23 32 51;
+    --ink-2: 69 79 98;
+    --ink-3: 98 108 126;
+    --line: 222 227 234;
+    --line-strong: 196 204 216;
+    --bar: 20 31 53;
+    --accent: 45 67 109;
+    --accent-strong: 34 53 91;
+    --accent-soft: 232 237 246;
+    --accent-ink: 44 74 136;
+    --success: 30 107 69;
+    --success-soft: 228 243 234;
+    --warning: 128 78 0;
+    --warning-soft: 253 243 219;
+    --danger: 161 42 42;
+    --danger-soft: 251 233 233;
+    color-scheme: light;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --canvas: 13 18 28;
+      --surface: 20 27 40;
+      --sunken: 16 22 33;
+      --ink: 231 236 243;
+      --ink-2: 184 194 209;
+      --ink-3: 145 156 174;
+      --line: 39 50 70;
+      --line-strong: 60 74 99;
+      --bar: 17 24 37;
+      --accent: 74 104 159;
+      --accent-strong: 96 127 184;
+      --accent-soft: 30 42 64;
+      --accent-ink: 160 184 228;
+      --success: 123 211 162;
+      --success-soft: 18 48 31;
+      --warning: 242 198 107;
+      --warning-soft: 58 44 14;
+      --danger: 242 155 155;
+      --danger-soft: 59 23 23;
+      color-scheme: dark;
+    }
+  }
+
+  body {
+    @apply bg-canvas font-sans text-base text-ink antialiased;
+    font-feature-settings: 'tnum' 0;
+  }
+  h1,
+  h2,
+  h3 {
+    @apply font-semibold text-ink;
+  }
+  ::selection {
+    @apply bg-accent/25;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+@layer components {
+  .panel {
+    @apply rounded-container border border-line bg-surface;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-control px-4 py-2.5 text-sm font-semibold transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-strong focus-visible:ring-offset-2 focus-visible:ring-offset-canvas disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply btn bg-accent text-white hover:bg-accent-strong;
+  }
+  .btn-secondary {
+    @apply btn border border-line-strong bg-surface text-ink hover:bg-sunken;
+  }
+  .btn-danger {
+    @apply btn bg-danger text-surface hover:opacity-90;
+  }
+  .btn-sm {
+    @apply px-3 py-1.5 text-xs;
+  }
+  .input {
+    @apply block h-12 w-full rounded-control border border-line-strong bg-surface px-3.5 py-2.5 text-base text-ink placeholder:text-ink-3 focus:border-accent-strong focus:outline-none focus:ring-2 focus:ring-accent-strong/25;
+  }
+  .label {
+    @apply mb-1.5 block text-sm font-semibold text-ink;
+  }
+  .hint {
+    @apply mt-1.5 text-sm text-ink-3;
+  }
+  .field-error {
+    @apply mt-1.5 text-sm font-semibold text-danger;
+  }
+  .link {
+    @apply font-semibold text-accent-ink underline-offset-2 hover:underline;
+  }
+  /* Small sentence-case caption for a value; never uppercase. */
+  .caption {
+    @apply text-sm text-ink-3;
+  }
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-chip bg-sunken px-2 py-0.5 text-xs font-semibold text-ink-2 ring-1 ring-inset ring-line;
+  }
+  .check {
+    @apply h-[18px] w-[18px] shrink-0 rounded border-line-strong accent-[rgb(var(--accent))];
+  }
+}

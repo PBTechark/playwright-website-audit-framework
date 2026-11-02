@@ -7,6 +7,8 @@
   "scripts": {
     "audit": "playwright test --config=playwright.config.ts",
     "audit:open": "npm run audit && npm run show-report",
+    "audit:smoke": "cross-env TARGETS_CSV=test-data/audit-targets-pr.csv playwright test --config=playwright.config.ts",
+    "test:unit": "playwright test --config=playwright.unit.config.ts",
     "build": "tsc -p tsconfig.json",
     "lint": "eslint . --ext .ts",
     "format": "prettier --write .",
@@ -27,6 +29,7 @@
     "@typescript-eslint/eslint-plugin": "latest",
     "@typescript-eslint/parser": "latest",
     "allure-playwright": "latest",
+    "cross-env": "7.0.3",
     "eslint": "latest",
     "prettier": "latest",
     "typescript": "latest"
