@@ -14,6 +14,9 @@ const runner = new AuditRunner(store);
 const app = express();
 
 app.disable('x-powered-by');
+// nginx on the same host terminates TLS; trust its X-Forwarded-* headers so req.ip (sign-in
+// lockout) and req.secure (Secure cookie) reflect the real client instead of 127.0.0.1/http.
+app.set('trust proxy', 'loopback');
 app.use((_req, res, next) => {
   res.set({
     'X-Content-Type-Options': 'nosniff',

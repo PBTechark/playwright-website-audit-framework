@@ -61,6 +61,22 @@ cd backend && npm start          # open http://127.0.0.1:4300
 For frontend development, run `npm run dev` in `backend/` and in `frontend/` (two terminals) and open
 http://localhost:5173. Vite proxies `/api` to the backend.
 
+### Share the dashboard with someone else (ngrok)
+
+```bash
+npm run share      # Ctrl+C stops sharing
+```
+
+This starts the dashboard (if it isn't already running) and an ngrok HTTPS tunnel to it. Send the
+`https://…` Forwarding URL that ngrok prints. The other person signs in with `DASHBOARD_USER_ID` /
+`DASHBOARD_PASSWORD` from `.env`.
+
+- Needs once: [ngrok](https://ngrok.com/download) and `ngrok config add-authtoken <token>`.
+- Refuses to start unless `DASHBOARD_PASSWORD` is at least 12 characters: anyone with the link reaches the sign-in page.
+- The URL changes every run. For a fixed one, claim your free static domain in the ngrok dashboard and set `NGROK_DOMAIN` in `.env`.
+- Free ngrok shows visitors a one-time "You are about to visit" page; they click **Visit Site**.
+- Anyone signed in can start audits, which run on this machine.
+
 How it connects to the engine:
 
 - **Start Audit** writes a one-row targets CSV for that audit and runs
@@ -142,7 +158,9 @@ changed. Exports contain the currently visible findings after applying the dashb
 The report sections are linked: summary figures, severity bars, page cards and the findings counts
 in **Page executions** filter the issue list and jump to it, and each issue links to its page
 execution rows. The same problem found in several viewports is shown as one issue card listing every
-affected viewport. **Download PDF** in the report header downloads a PDF rendered by the dashboard
+affected viewport. Selecting a viewport in the filter also limits screenshots to that viewport: issue
+evidence and **Page executions** rows of other viewports are hidden. The dashboard does the same in
+its Issues and **Pages and screenshots** tabs, which share one viewport filter. **Download PDF** in the report header downloads a PDF rendered by the dashboard
 backend (`GET /api/audits/:id/report.pdf`); when a report file is opened directly from disk, the
 button opens the browser's print dialog, where it can be saved as a PDF.
 
@@ -286,14 +304,45 @@ To enable deployment, a repository administrator must set **Settings → Pages �
 
 CI defaults to `AUDIT_FAIL_ON_SEVERITY=Medium` and a three-hour audit timeout. Override these through GitHub Actions repository variables `AUDIT_FAIL_ON_SEVERITY` and `GLOBAL_TIMEOUT_MS`. The job runs the TypeScript build and ESLint before the audit. A generated report is still published when the audit fails its quality gate, and the workflow preserves the audit failure status after deployment.
 
+## Running on a small server (2 cores / 4 GB RAM / 2 GB swap)
+
+`.env.example` is tuned for this size. Measured there with 2 workers:
+
+| | Value |
+| --- | --- |
+| Time per page per viewport | ~31 s (heavy pages up to ~2 min) |
+| Pages per hour, all 5 viewports | ~23 |
+| Peak memory while testing | ~1.5 GB |
+| Peak memory while building reports for 200 pages | ~2.7 GB |
+
+What keeps it stable:
+
+- **One audit at a time.** Every run shares `reports/`, `screenshots/` and the page inventory. A lock file (`reports/.audit-run.lock`) refuses a second run, from the command line or the dashboard, while one is in progress. A lock left by a crashed run is taken over automatically. Don't run `npm ci` while an audit is running.
+- **Workers = CPU cores.** Each worker drives its own Chromium.
+- **No retries, traces or videos by default.** Findings fail tests on purpose, so retries only repeat work. Trace and video recording costs ~30% run time and ~30 MB per page with findings. Turn them on with `TRACE_MODE` / `VIDEO_MODE` only to debug the engine.
+- **2.5 GB heap for the engine.** Report generation holds every result in memory. Node's default heap on a 4 GB server (~1 GB) runs out at roughly 100–200 pages.
+- **Page budget.** The dashboard rejects audits above `AUDIT_MAX_PAGES_LIMIT` (60), which fits the 3-hour `GLOBAL_TIMEOUT_MS`.
+- **Screenshots are cleared at the start of each run.** The dashboard copies each audit's evidence into `backend/data/audits/` first.
+
+What makes it fast (detection rules and their waits are unchanged):
+
+- **Each link is checked once per run.** A link's status depends only on its URL, so the result is shared on disk (`reports/.link-cache/`, deleted at the end of the run) by every page, viewport and worker. Timeouts and network errors are never shared; they are re-checked.
+- **Sites are crawled in parallel**, one per worker (`AUDIT_WORKERS`). Each site is still crawled exactly as before.
+- **No pointless network waits for evidence.** If a page's network never goes idle within 10 s of loading (analytics, chat widgets), screenshot preparation skips its extra 5 s `networkidle` wait. The waits used by detection, including the reload check, still run.
+- **The quality gate reuses the results report generation already loaded**, instead of parsing every raw file again.
+
 ## Docker
 
 Build and run:
 
 ```bash
 docker build -t website-audit .
-docker run --rm -v "%cd%/test-data:/app/test-data" -v "%cd%/reports:/app/reports" -v "%cd%/screenshots:/app/screenshots" website-audit
+docker run --rm --cpus=2 --memory=4g --memory-swap=6g --shm-size=1g --env-file .env -v "%cd%/test-data:/app/test-data" -v "%cd%/reports:/app/reports" -v "%cd%/screenshots:/app/screenshots" website-audit
 ```
+
+`.dockerignore` keeps `.env` (your dashboard password), `node_modules`, reports and saved audits out of the image; `--env-file .env` passes the settings at run time instead.
+
+`--shm-size=1g` matters: Docker's default 64 MB of shared memory crashes Chromium on large pages.
 
 ## Quality Gates
 

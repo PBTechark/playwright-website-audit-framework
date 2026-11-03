@@ -1,0 +1,20 @@
+# Secrets stay out of the image; pass settings at run time (docker run --env-file .env).
+.env
+.env.*
+!.env.example
+# Installed inside the image by npm ci.
+node_modules
+backend/node_modules
+frontend/node_modules
+# Generated output and local data.
+reports
+screenshots
+traces
+logs
+test-results
+allure-results
+dist
+backend/data
+test-data/page-inventory.json
+*.log
+.git

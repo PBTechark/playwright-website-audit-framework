@@ -18,6 +18,11 @@ export const backendConfig = {
   maxPagesLimit: intFromEnv('AUDIT_MAX_PAGES_LIMIT', 200),
   maxDepthLimit: intFromEnv('AUDIT_MAX_DEPTH_LIMIT', 6),
   workers: intFromEnv('AUDIT_WORKERS', 2),
+  /**
+   * Heap for the engine process. Report generation holds every result in memory: 200 pages x 5
+   * viewports needs ~2 GB, while Node's default on a 4 GB server is ~1 GB.
+   */
+  engineHeapMb: intFromEnv('AUDIT_ENGINE_HEAP_MB', 2560),
   /** Hard stop for a job, slightly longer than Playwright's own global timeout. */
   jobTimeoutMs: intFromEnv('AUDIT_JOB_TIMEOUT_MS', auditConfig.globalTimeoutMs + 5 * 60 * 1000),
   /** Set to true only for trusted internal deployments that must audit intranet sites. */

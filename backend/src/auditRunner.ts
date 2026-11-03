@@ -4,6 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import { ensureDir } from '../../utils/fileSystem';
 import { Logger } from '../../utils/logger';
+import { runLockHolder } from '../../utils/runLock';
 import { auditConfig, backendConfig } from './config';
 import { AuditProgress, AuditRecord, AuditSettings } from './apiTypes';
 import { buildSummary, readRawResults, readReportHealthScore, snapshotArtifacts } from './auditResults';
@@ -48,6 +49,10 @@ export class AuditRunner {
     if (this.active) {
       throw new HttpError(409, 'Another audit is already running. Wait for it to finish or cancel it first.');
     }
+    // Command-line runs (npm run audit) share the engine folder but are not tracked by this server.
+    if (runLockHolder() !== null) {
+      throw new HttpError(409, 'An audit started from the command line is running on this server. Try again when it finishes.');
+    }
     const id = createAuditId();
     ensureDir(this.store.dir(id));
     writeRunTargetCsv(this.store.targetsCsvPath(id), {
@@ -75,6 +80,7 @@ export class AuditRunner {
     const child = spawn(
       process.execPath,
       [
+        `--max-old-space-size=${backendConfig.engineHeapMb}`,
         playwrightCli,
         'test',
         '--config=playwright.config.ts',
