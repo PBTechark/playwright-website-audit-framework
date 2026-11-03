@@ -53,4 +53,42 @@ test.describe('Evidence manager', () => {
     expect(fs.existsSync(screenshotPath)).toBe(true);
     expect(fs.statSync(screenshotPath).size).toBeGreaterThan(1000);
   });
+
+  test('highlights the affected control and the occluding image for overlap findings', async ({ page }) => {
+    await page.setViewportSize({ width: 1024, height: 1366 });
+    const markup = `
+      <style>
+        button { position:absolute; top:0; left:calc(100% - 250px); width:400px; height:100px; }
+        img { position:fixed; right:0; top:0; width:100px; height:100px; }
+      </style>
+      <button id="target-button">Continue</button>
+      <img id="corner-ribbon" alt="Corner ribbon" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100' height='100'%3E%3Crect width='100' height='100' fill='green'/%3E%3C/svg%3E">
+    `;
+    await page.route('https://example.com/overlap', (route) =>
+      route.fulfill({ contentType: 'text/html', body: markup })
+    );
+    await page.goto('https://example.com/overlap');
+    const result = await new VisualAudit().run(page, 'https://example.com/overlap', 'iPad Pro Portrait', 'test-target');
+    const issue = result.issues.find((candidate) =>
+      candidate.description.startsWith('Element Overlap:') &&
+      candidate.details && typeof candidate.details === 'object' &&
+      'imageObstructsControl' in candidate.details &&
+      candidate.details.imageObstructsControl === true
+    );
+
+    expect(issue?.selector).toBe('#target-button');
+    expect(issue?.details).toMatchObject({
+      occludingSelector: '#corner-ribbon',
+      overlapBox: expect.objectContaining({
+        width: expect.any(Number),
+        height: expect.any(Number)
+      })
+    });
+    expect(issue?.evidenceDetails).toHaveLength(3);
+    expect(issue?.evidenceDetails?.every((evidence) => evidence.annotated)).toBe(true);
+    expect(issue?.evidenceDetails?.some((evidence) => evidence.label.includes('overlap-diagnostic'))).toBe(true);
+    for (const evidence of issue?.evidenceDetails ?? []) {
+      expect(fs.existsSync(path.join(process.cwd(), evidence.path))).toBe(true);
+    }
+  });
 });

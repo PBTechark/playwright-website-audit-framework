@@ -26,11 +26,13 @@ test('reports visible CTA anchors that use placeholder href values', async ({ pa
       expect.objectContaining({
         category: 'Links',
         selector: '#call-office',
+        evidenceDetails: [expect.objectContaining({ label: 'link-cta-issue-0', annotated: true })],
         description: expect.stringContaining('Visible CTA link has no actionable destination')
       }),
       expect.objectContaining({
         category: 'Links',
         selector: '#email-office',
+        evidenceDetails: [expect.objectContaining({ label: 'link-cta-issue-1', annotated: true })],
         description: expect.stringContaining('Visible CTA link has no actionable destination')
       })
     ]));

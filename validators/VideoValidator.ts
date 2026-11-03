@@ -728,18 +728,35 @@ export class VideoValidator {
     return page.evaluate(() => {
       type B = { x: number; y: number; width: number; height: number };
       const selectorFor = (element: Element): string => {
-        if (element.id) return `#${CSS.escape(element.id)}`;
-        const testIdAttribute = element.hasAttribute('data-testid') ? 'data-testid' : 'data-test';
-        const testId = element.getAttribute(testIdAttribute);
-        if (testId) return `[${testIdAttribute}="${CSS.escape(testId)}"]`;
+        const uniquelySelectsElement = (selector: string): boolean => {
+          try {
+            const matches = document.querySelectorAll(selector);
+            return matches.length === 1 && matches[0] === element;
+          } catch {
+            return false;
+          }
+        };
+        for (const [attribute, value] of [
+          ['id', element.id],
+          ['data-testid', element.getAttribute('data-testid') ?? ''],
+          ['data-test', element.getAttribute('data-test') ?? '']
+        ]) {
+          if (!value) continue;
+          const candidate = attribute === 'id'
+            ? `#${CSS.escape(value)}`
+            : `[${attribute}="${CSS.escape(value)}"]`;
+          if (uniquelySelectsElement(candidate)) return candidate;
+        }
         const parts: string[] = [];
         let node: Element | null = element;
-        while (node && node !== document.body && parts.length < 6) {
+        while (node && node !== document.body) {
           const siblings = node.parentElement
             ? Array.from(node.parentElement.children).filter((item) => item.tagName === node!.tagName)
             : [];
           parts.unshift(`${node.tagName.toLowerCase()}:nth-of-type(${Math.max(1, siblings.indexOf(node) + 1)})`);
           node = node.parentElement;
+          const candidate = `body > ${parts.join(' > ')}`;
+          if (node === document.body && uniquelySelectsElement(candidate)) return candidate;
         }
         return `body > ${parts.join(' > ')}`;
       };

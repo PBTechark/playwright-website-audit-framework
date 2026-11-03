@@ -46,28 +46,48 @@ export class VisualAudit {
     const pageEvidence = screenshots.map((item) => item.path);
     for (const [index, defect] of defects.entries()) {
       const issueEvidence = [...pageEvidence];
-      // Element-level evidence makes the finding actionable without forcing readers to inspect a full page.
+      const issueEvidenceDetails: ScreenshotEvidence[] = [];
       const evidenceSelectors = defect.selector
         .split(' / ')
         .map((selector) => selector.trim())
         .filter((selector) => selector && selector !== 'layout-row');
-      if (evidenceSelectors.length > 0) {
+      const occludingSelector = defect.details.occludingSelector;
+      if (typeof occludingSelector === 'string' && occludingSelector.trim()) {
+        evidenceSelectors.push(occludingSelector.trim());
+      }
+      const uniqueEvidenceSelectors = Array.from(new Set(evidenceSelectors));
+      const affectedSelector = defect.details.occludedSelector;
+      const overlapOccludingSelector = defect.details.occludingSelector;
+      if (
+        defect.type === 'Element Overlap' &&
+        typeof affectedSelector === 'string' &&
+        typeof overlapOccludingSelector === 'string'
+      ) {
+        const overlapShot = await evidence.captureOverlapDiagnostic(
+          `defect-${index}-overlap-diagnostic`,
+          affectedSelector,
+          overlapOccludingSelector
+        ).catch(() => null);
+        if (overlapShot) {
+          screenshots.push(overlapShot);
+          issueEvidence.push(overlapShot.path);
+          issueEvidenceDetails.push(overlapShot);
+        }
+      }
+      if (uniqueEvidenceSelectors.length > 0) {
         const defectLabel = `defect-${index}-${defect.type}`;
-        for (const [selectorIndex, evidenceSelector] of evidenceSelectors.entries()) {
-          const selectorLabel = evidenceSelectors.length > 1 ? `${defectLabel}-${selectorIndex + 1}` : defectLabel;
+        for (const [selectorIndex, evidenceSelector] of uniqueEvidenceSelectors.entries()) {
+          const selectorLabel = uniqueEvidenceSelectors.length > 1 ? `${defectLabel}-${selectorIndex + 1}` : defectLabel;
           const elementShot = await evidence.captureElementRegionWithHighlight(selectorLabel, evidenceSelector).catch(() => null) ??
             await evidence.captureLocator(
               selectorLabel,
               page.locator(evidenceSelector).first()
             ).catch(() => null) ??
-            await evidence.captureElementRegion(selectorLabel, evidenceSelector).catch(() => null) ??
-            await page.locator(evidenceSelector).first().scrollIntoViewIfNeeded({ timeout: 5_000 })
-              .then(() => evidence.captureAboveFold(selectorLabel))
-              .catch(() => null) ??
-            await evidence.captureFullPage(selectorLabel).catch(() => null);
+            await evidence.captureElementRegion(selectorLabel, evidenceSelector).catch(() => null);
           if (elementShot) {
             screenshots.push(elementShot);
             issueEvidence.push(elementShot.path);
+            issueEvidenceDetails.push(elementShot);
           }
         }
       }
@@ -80,6 +100,7 @@ export class VisualAudit {
         description: `${defect.type}: ${defect.description}`,
         severity: defect.severity ?? this.severityFor(defect.type),
         evidence: issueEvidence,
+        evidenceDetails: issueEvidenceDetails,
         expected: this.expectedFor(defect.type),
         actual: `${defect.description} Measured details: ${JSON.stringify(defect.details)}.`,
         businessImpact: this.businessImpactFor(defect.type),

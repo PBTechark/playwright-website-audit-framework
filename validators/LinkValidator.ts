@@ -4,11 +4,13 @@ import { createIssue } from '../utils/issueFactory';
 import { AuditIssue, LinkFinding } from '../utils/types';
 import { isInternalNavigableUrl, normalizeUrl, uniqueUrls } from '../utils/urlUtils';
 import { mapWithConcurrency } from '../utils/concurrency';
+import { EvidenceManager } from '../utils/evidence';
 
 export class LinkValidator {
   constructor(
     private readonly request: APIRequestContext,
-    private readonly baseUrl: string
+    private readonly baseUrl: string,
+    private readonly targetName = 'default'
   ) {}
 
   async validate(
@@ -27,6 +29,7 @@ export class LinkValidator {
     if (logoHref && !links.includes(logoHref)) links.unshift(logoHref);
     const findings: LinkFinding[] = [];
     const issues: AuditIssue[] = [];
+    const evidence = new EvidenceManager(page, url, viewport, this.targetName);
 
     const checkedLinks = await mapWithConcurrency(links, auditConfig.apiValidationConcurrency, (link) =>
       this.checkLink(url, link, link === logoHref)
@@ -102,7 +105,12 @@ export class LinkValidator {
     }
 
     const placeholderCtas = await this.findPlaceholderCtaLinks(page);
-    for (const cta of placeholderCtas) {
+    for (const [index, cta] of placeholderCtas.entries()) {
+      const screenshot = await evidence.captureElementDiagnostic(
+        `link-cta-issue-${index}`,
+        cta.selector,
+        `a "${cta.text}"`
+      );
       issues.push(
         createIssue({
           category: 'Links',
@@ -117,7 +125,9 @@ export class LinkValidator {
             'Users can see and click the CTA, but the action does not take them anywhere useful.',
           suggestedFix:
             'Replace the placeholder href with the correct URL, tel: link, mailto: link, or remove the CTA until the destination is ready.',
-          details: cta
+          details: cta,
+          evidence: screenshot ? [screenshot.path] : [],
+          evidenceDetails: screenshot ? [screenshot] : []
         })
       );
       findings.push({
@@ -264,10 +274,21 @@ export class LinkValidator {
   > {
     return page.evaluate(() => {
       const selectorFor = (element: Element): string => {
-        if (element.id) return `#${CSS.escape(element.id)}`;
+        const uniquelySelectsElement = (selector: string): boolean => {
+          try {
+            const matches = document.querySelectorAll(selector);
+            return matches.length === 1 && matches[0] === element;
+          } catch {
+            return false;
+          }
+        };
+        if (element.id) {
+          const candidate = `#${CSS.escape(element.id)}`;
+          if (uniquelySelectsElement(candidate)) return candidate;
+        }
         const parts: string[] = [];
         let node: Element | null = element;
-        while (node && node !== document.body && parts.length < 5) {
+        while (node && node !== document.body) {
           const siblings = node.parentElement
             ? Array.from(node.parentElement.children).filter((item) => item.tagName === node!.tagName)
             : [];
@@ -275,6 +296,8 @@ export class LinkValidator {
             `${node.tagName.toLowerCase()}:nth-of-type(${Math.max(1, siblings.indexOf(node) + 1)})`
           );
           node = node.parentElement;
+          const candidate = `body > ${parts.join(' > ')}`;
+          if (node === document.body && uniquelySelectsElement(candidate)) return candidate;
         }
         return `body > ${parts.join(' > ')}`;
       };

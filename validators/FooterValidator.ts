@@ -35,11 +35,28 @@ export class FooterValidator {
       );
     }
 
-    const copyrightVisible = await footer
-      .locator('text=/copyright|©|all rights reserved/i')
-      .first()
-      .isVisible()
-      .catch(() => false);
+    const copyrightVisible = await page.evaluate(() => {
+      const copyrightPattern = /copyright|©|all rights reserved/i;
+      const candidates = Array.from(document.querySelectorAll<HTMLElement>(
+        'footer, [role="contentinfo"], .copyright, [class*="copyright" i], [id*="copyright" i]'
+      ));
+      return candidates.some((element) => {
+        const text = element.innerText || element.textContent || '';
+        if (!copyrightPattern.test(text)) return false;
+
+        const rect = element.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return false;
+        let current: HTMLElement | null = element;
+        while (current && current !== document.documentElement) {
+          const style = window.getComputedStyle(current);
+          if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) <= 0.01) {
+            return false;
+          }
+          current = current.parentElement;
+        }
+        return true;
+      });
+    });
     if (!copyrightVisible) {
       issues.push(
         createIssue({

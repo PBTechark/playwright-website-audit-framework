@@ -6,6 +6,8 @@ dotenv.config();
 
 export default defineConfig({
   testDir: './tests',
+  // Unit specs run separately via `npm run test:unit` (playwright.unit.config.ts).
+  testMatch: 'website-audit.spec.ts',
   timeout: auditConfig.testTimeoutMs,
   globalTimeout: auditConfig.globalTimeoutMs,
   expect: {
@@ -20,7 +22,9 @@ export default defineConfig({
   reporter: [
     ['list'],
     ['allure-playwright', { outputFolder: auditConfig.allureResultsDir }],
-    ['./reporters/maintenance-reporter.ts']
+    ['./reporters/maintenance-reporter.ts'],
+    // Live progress events for the dashboard backend; inactive for command-line runs.
+    ...(process.env.AUDIT_PROGRESS_FILE ? [['./reporters/progress-reporter.ts'] as [string]] : [])
   ],
   use: {
     actionTimeout: auditConfig.actionTimeoutMs,

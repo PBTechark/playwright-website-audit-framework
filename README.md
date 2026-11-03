@@ -25,6 +25,69 @@ npx playwright install
 npm run audit
 ```
 
+## Dashboard (frontend + backend)
+
+A web dashboard can configure, start, monitor and review audits without editing the CSV or using the
+terminal. It drives this same engine; the command-line workflow above is unchanged.
+
+```text
+frontend/   React + TypeScript + Tailwind UI (sign-in, dashboard, new audit, live progress, results, history)
+backend/    Express + TypeScript API that validates requests and runs the engine as a background job
+```
+
+Setup (once, after the engine's `npm ci` and `npx playwright install`):
+
+1. Add the sign-in credentials to `.env` (never to `.env.example`):
+
+   ```env
+   DASHBOARD_USER_ID=999
+   DASHBOARD_PASSWORD=change-me
+   ```
+
+2. Install both apps:
+
+   ```bash
+   cd backend && npm ci && cd ..
+   cd frontend && npm ci && cd ..
+   ```
+
+Run it in one terminal by building the frontend and letting the backend serve it:
+
+```bash
+cd frontend && npm run build && cd ..
+cd backend && npm start          # open http://127.0.0.1:4300
+```
+
+For frontend development, run `npm run dev` in `backend/` and in `frontend/` (two terminals) and open
+http://localhost:5173. Vite proxies `/api` to the backend.
+
+How it connects to the engine:
+
+- **Start Audit** writes a one-row targets CSV for that audit and runs
+  `playwright test --config=playwright.config.ts --project=<viewport>...` with `TARGETS_CSV` pointing at
+  it, so `test-data/audit-targets.csv` is never modified. Saved websites are read from that CSV.
+- `reporters/progress-reporter.ts` streams per-test progress to the backend. It is enabled only when
+  `AUDIT_PROGRESS_FILE` is set, so command-line runs are unaffected.
+- Audits share `reports/`, `screenshots/` and the page inventory, so **one audit runs at a time**.
+  When an audit ends, its reports and the screenshots it captured are copied to
+  `backend/data/audits/<audit-id>/`, so history keeps working after later runs overwrite `reports/`.
+- Dashboard runs set `AUDIT_FAIL_ON_SEVERITY=Off`: findings appear in the dashboard instead of failing
+  the job.
+
+Backend settings (in `.env`): `BACKEND_HOST` (default `127.0.0.1`), `BACKEND_PORT` (default `4300`),
+`AUDIT_MAX_PAGES_LIMIT` (default `200`), `AUDIT_MAX_DEPTH_LIMIT` (default `6`), `AUDIT_JOB_TIMEOUT_MS`,
+and `AUDIT_ALLOW_PRIVATE_TARGETS` (default `false`).
+
+Security notes:
+
+- Every API route, report and screenshot requires a signed-in session (httpOnly cookie, 12 hours).
+  Five failed sign-ins from one address lock that address out for 15 minutes.
+- Start URLs that resolve to localhost, private networks or cloud metadata endpoints are rejected,
+  including through redirects of the start URL. The engine's crawler follows same-domain links only,
+  but it does not re-check addresses during the crawl.
+- The backend binds to `127.0.0.1` by default. Before exposing it on a network, put it behind HTTPS
+  and replace the single shared account with real user management.
+
 ## What Runs
 
 The audit flow is automatic:
@@ -72,9 +135,16 @@ Available report files include:
 The custom dashboard is the canonical report opened by `npm run show-report`. Each generated
 dashboard includes current severity charts, a historical severity trend stored under
 `reports/history/severity-history.json`, page-level drill-down links, screenshot/video evidence,
-filtered CSV and JSON export buttons, and a system-aware light/dark theme toggle. Exports contain
-the currently visible findings after applying the dashboard filters. Set `REPORT_HISTORY_RETENTION`
-in `.env` to control how many run snapshots are retained.
+JSON and Excel export buttons, and a light/dark theme switch that follows the system theme until
+changed. Exports contain the currently visible findings after applying the dashboard filters. Set
+`REPORT_HISTORY_RETENTION` in `.env` to control how many run snapshots are retained.
+
+The report sections are linked: summary figures, severity bars, page cards and the findings counts
+in **Page executions** filter the issue list and jump to it, and each issue links to its page
+execution rows. The same problem found in several viewports is shown as one issue card listing every
+affected viewport. **Download PDF** in the report header downloads a PDF rendered by the dashboard
+backend (`GET /api/audits/:id/report.pdf`); when a report file is opened directly from disk, the
+button opens the browser's print dialog, where it can be saved as a PDF.
 
 Visual issue evidence includes an annotated defect-region derivative and, when available, the
 unmodified original capture. Use the `View annotated` action to locate the defect quickly and
@@ -92,8 +162,9 @@ Screenshots are stored in `screenshots/`. Raw results are stored in `reports/raw
 
 ### Assertion register
 
-Every website report contains an **Assertion Register**. Unlike the Findings section, it includes
-both PASS and FAIL records. Each record identifies the component and check name and includes the
+Every audit records an **Assertion Register** in the **Assertions** sheet of the Excel report and in
+the JSON report (it is not shown in the HTML report). Unlike the findings, it includes both PASS and
+FAIL records. Each record identifies the component and check name and includes the
 expected result, actual result, plain-language comment, severity, recommendation, page, viewport,
 timestamp, stable element locator, bounding box, available response/console data, and screenshot
 evidence. This makes the same report useful to QA, engineering, product, and business readers.

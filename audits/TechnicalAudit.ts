@@ -16,7 +16,7 @@ export class TechnicalAudit {
           url,
           viewport,
           description: `Console ${finding.type}: ${finding.text.slice(0, 240)}`,
-          severity: finding.type === 'uncaught-exception' ? 'Critical' : finding.type === 'error' ? 'High' : 'Low',
+          severity: 'Low',
           suggestedFix: 'Investigate browser console output and fix the underlying JavaScript or runtime warning.',
           details: finding
         })
@@ -27,17 +27,13 @@ export class TechnicalAudit {
       (finding) => `${finding.method}|${finding.url}|${finding.status ?? ''}|${finding.resourceType}|${finding.failureText ?? ''}`
     );
     for (const finding of uniqueNetworkFindings.slice(0, 150)) {
-      const missingCssOrJs =
-        finding.status &&
-        finding.status >= 400 &&
-        ['stylesheet', 'script'].includes(finding.resourceType);
       issues.push(
         createIssue({
           category: 'Technical',
           url,
           viewport,
           description: `Network failure for ${finding.resourceType}: ${finding.url}`,
-          severity: missingCssOrJs ? 'Critical' : finding.status && finding.status >= 500 ? 'Critical' : 'High',
+          severity: 'Low',
           suggestedFix: 'Restore the failed resource, fix routing/CDN configuration, or update stale asset references.',
           details: finding
         })

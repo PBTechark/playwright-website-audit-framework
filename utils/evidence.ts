@@ -60,8 +60,9 @@ export class EvidenceManager {
     }
     const filePath = this.makePath(label);
     const clip = await this.page.evaluate((cssSelector) => {
-      const element = document.querySelector<HTMLElement>(cssSelector);
-      if (!element) return null;
+      const matches = document.querySelectorAll<HTMLElement>(cssSelector);
+      if (matches.length !== 1) return null;
+      const element = matches[0];
       element.scrollIntoView({ block: 'center', inline: 'center' });
       const rect = element.getBoundingClientRect();
       const viewportWidth = window.innerWidth;
@@ -90,8 +91,9 @@ export class EvidenceManager {
     const filePath = this.makePath(label);
     const sourcePath = this.makePath(`${label}-original`);
     const clip = await this.page.evaluate((cssSelector) => {
-      const element = document.querySelector<HTMLElement>(cssSelector);
-      if (!element) return null;
+      const matches = document.querySelectorAll<HTMLElement>(cssSelector);
+      if (matches.length !== 1) return null;
+      const element = matches[0];
       element.scrollIntoView({ block: 'center', inline: 'center' });
       const rect = element.getBoundingClientRect();
       const viewportWidth = window.innerWidth;
@@ -156,8 +158,9 @@ export class EvidenceManager {
     const filePath = this.makePath(label);
     const prepared = await this.page.evaluate(
       ({ cssSelector, targetDescription }) => {
-        const target = document.querySelector<HTMLElement>(cssSelector);
-        if (!target) return null;
+        const matches = document.querySelectorAll<HTMLElement>(cssSelector);
+        if (matches.length !== 1) return null;
+        const target = matches[0];
 
         const targetStyle = window.getComputedStyle(target);
         const targetRect = target.getBoundingClientRect();
@@ -253,6 +256,113 @@ export class EvidenceManager {
       return null;
     }
 
+    return {
+      label,
+      path: toRelativePath(filePath),
+      annotated: true,
+      width: prepared.width,
+      height: prepared.height
+    };
+  }
+
+  async captureOverlapDiagnostic(
+    label: string,
+    affectedSelector: string,
+    occludingSelector: string
+  ): Promise<ScreenshotEvidence | null> {
+    if (auditConfig.screenshotMode === 'off') return null;
+
+    const filePath = this.makePath(label);
+    const prepared = await this.page.evaluate(
+      ({ affectedSelector: affectedCss, occludingSelector: occludingCss }) => {
+        const uniqueElement = (selector: string): HTMLElement | null => {
+          try {
+            const elements = document.querySelectorAll<HTMLElement>(selector);
+            return elements.length === 1 ? elements[0] : null;
+          } catch {
+            return null;
+          }
+        };
+        const affected = uniqueElement(affectedCss);
+        const occluding = uniqueElement(occludingCss);
+        if (!affected || !occluding || affected === occluding) return null;
+
+        affected.scrollIntoView({ block: 'center', inline: 'center' });
+        const affectedRect = affected.getBoundingClientRect();
+        const occludingRect = occluding.getBoundingClientRect();
+        const left = Math.max(0, affectedRect.left, occludingRect.left);
+        const top = Math.max(0, affectedRect.top, occludingRect.top);
+        const right = Math.min(window.innerWidth, affectedRect.right, occludingRect.right);
+        const bottom = Math.min(window.innerHeight, affectedRect.bottom, occludingRect.bottom);
+        if (right - left <= 1 || bottom - top <= 1) return null;
+
+        const overlay = document.createElement('div');
+        overlay.id = 'audit-overlap-diagnostic';
+        overlay.style.position = 'fixed';
+        overlay.style.inset = '0';
+        overlay.style.zIndex = '2147483647';
+        overlay.style.pointerEvents = 'none';
+        const outline = (rect: DOMRect, color: string, title: string) => {
+          const box = document.createElement('div');
+          box.style.position = 'fixed';
+          box.style.left = `${rect.left}px`;
+          box.style.top = `${rect.top}px`;
+          box.style.width = `${rect.width}px`;
+          box.style.height = `${rect.height}px`;
+          box.style.boxSizing = 'border-box';
+          box.style.border = `3px solid ${color}`;
+          box.title = title;
+          overlay.appendChild(box);
+        };
+        outline(affectedRect, '#1677ff', `Affected element: ${affectedCss}`);
+        outline(occludingRect, '#ff8a00', `Occluding element: ${occludingCss}`);
+
+        const intersection = document.createElement('div');
+        intersection.style.position = 'fixed';
+        intersection.style.left = `${left}px`;
+        intersection.style.top = `${top}px`;
+        intersection.style.width = `${right - left}px`;
+        intersection.style.height = `${bottom - top}px`;
+        intersection.style.boxSizing = 'border-box';
+        intersection.style.border = '3px solid #e11d48';
+        intersection.style.background = 'rgba(225, 29, 72, 0.38)';
+        overlay.appendChild(intersection);
+
+        const callout = document.createElement('div');
+        callout.style.position = 'fixed';
+        callout.style.left = '12px';
+        callout.style.top = '12px';
+        callout.style.maxWidth = 'min(720px, calc(100vw - 24px))';
+        callout.style.padding = '10px 12px';
+        callout.style.border = '2px solid #e11d48';
+        callout.style.borderRadius = '6px';
+        callout.style.background = '#fff';
+        callout.style.color = '#111827';
+        callout.style.font = '600 13px/1.5 Arial, sans-serif';
+        callout.style.whiteSpace = 'pre-wrap';
+        callout.style.overflowWrap = 'anywhere';
+        callout.style.boxShadow = '0 2px 12px rgba(0,0,0,.25)';
+        callout.textContent =
+          `OVERLAP EVIDENCE: red = measured intersection (${Math.round((right - left) * (bottom - top))} px²)\n` +
+          `Blue outline = affected element: ${affectedCss}\n` +
+          `Orange outline = element painted above it: ${occludingCss}`;
+        overlay.appendChild(callout);
+        document.documentElement.appendChild(overlay);
+        return { width: window.innerWidth, height: window.innerHeight };
+      },
+      { affectedSelector, occludingSelector }
+    );
+    if (!prepared) return null;
+
+    try {
+      await this.page.screenshot({ path: filePath, fullPage: false, timeout: 10_000 });
+    } finally {
+      await this.page.evaluate(() => {
+        document.getElementById('audit-overlap-diagnostic')?.remove();
+      });
+    }
+
+    if (!this.hasUsableScreenshot(filePath)) return null;
     return {
       label,
       path: toRelativePath(filePath),

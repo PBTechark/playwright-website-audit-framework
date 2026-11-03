@@ -191,7 +191,11 @@ test.describe('Automated website audit', () => {
           issues.push(...(await new FormValidator().validate(page, pageItem.url, viewport)));
           issues.push(...(await new ButtonValidator().validate(page, pageItem.url, viewport, pageItem.targetName)));
 
-          const linkResult = await new LinkValidator(api, pageItem.targetBaseUrl).validate(page, pageItem.url, viewport);
+          const linkResult = await new LinkValidator(api, pageItem.targetBaseUrl, pageItem.targetName).validate(
+            page,
+            pageItem.url,
+            viewport
+          );
           const imageResult = await new ImageValidator(api).validate(page, pageItem.url, viewport, pageItem.targetName);
           const videoResult = await new VideoValidator(api).validate(
             page,

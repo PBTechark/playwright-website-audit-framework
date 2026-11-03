@@ -4,6 +4,132 @@ import { expect, test } from '@playwright/test';
 import { ButtonValidator } from '../validators/ButtonValidator';
 
 test.describe('Button validator evidence', () => {
+  test('does not report low contrast when a rendered gradient makes computed contrast indeterminate', async ({ page }) => {
+    await page.setContent(`
+      <style>
+        body { background: white; }
+        button {
+          width: 180px;
+          height: 48px;
+          color: white;
+          background-image: linear-gradient(#111, #111);
+          border: 0;
+        }
+      </style>
+      <button>Clearly visible action</button>
+    `);
+
+    const issues = await new ButtonValidator().validate(page, 'https://example.com/', 'Desktop Full HD');
+
+    expect(issues.filter((issue) => issue.description.includes('unreadable on hover'))).toHaveLength(0);
+  });
+
+  test('does not label readable button text as disappearing when low contrast is unchanged on hover', async ({ page }) => {
+    await page.setContent(`
+      <style>
+        button {
+          width: 180px;
+          height: 48px;
+          color: #ff9811;
+          background: white;
+          border: 0;
+        }
+      </style>
+      <button>Call now</button>
+    `);
+
+    const issues = await new ButtonValidator().validate(page, 'https://example.com/', 'Desktop Full HD');
+
+    expect(issues.filter((issue) => issue.description.includes('unreadable on hover'))).toHaveLength(0);
+  });
+
+  test('reports button text contrast that becomes low specifically on hover', async ({ page }) => {
+    await page.setContent(`
+      <style>
+        button {
+          width: 180px;
+          height: 48px;
+          color: black;
+          background: white;
+          border: 0;
+        }
+        button:hover { color: #ff9811; }
+      </style>
+      <button>Call now</button>
+    `);
+
+    const issues = await new ButtonValidator().validate(page, 'https://example.com/', 'Desktop Full HD');
+    const issue = issues.find((candidate) => candidate.description.includes('unreadable on hover'));
+
+    expect(issue).toBeDefined();
+    expect(issue?.details).toMatchObject({
+      hover: {
+        baselineContrastRatio: 21,
+        contrastRatio: 2.15
+      }
+    });
+  });
+
+  test('resolves dynamically referenced hidden navigation controls despite unrelated hrefs', async ({ page }) => {
+    const ariaTargetId = `nav-${Date.now()}-primary`;
+    const bootstrapTargetId = `nav-${Date.now()}-secondary`;
+    await page.setContent(`
+      <header>
+        <div id="${ariaTargetId}"><nav><a href="/admissions">Admissions</a></nav></div>
+        <nav id="${bootstrapTargetId}"><a href="/campus">Campus</a></nav>
+        <button type="button" aria-label="Open primary menu" aria-controls="${ariaTargetId}"
+          href="/unrelated-destination" style="display:none"></button>
+        <button type="button" aria-label="Open secondary menu" data-bs-target="#${bootstrapTargetId}"
+          href="/another-unrelated-destination" style="display:none"></button>
+      </header>
+    `);
+
+    const issues = await new ButtonValidator().validate(page, 'https://example.com/', 'Desktop Full HD');
+
+    expect(issues.filter((issue) => issue.description.includes('not visible'))).toHaveLength(0);
+    expect(issues.filter((issue) => issue.description.includes('smaller than recommended'))).toHaveLength(0);
+  });
+
+  test('still reports hidden controls that target a visible non-navigation component', async ({ page }) => {
+    const dialogId = `dialog-${Date.now()}-details`;
+    await page.setContent(`
+      <div id="${dialogId}" role="dialog">Visible dialog content</div>
+      <button type="button" aria-label="Open details" aria-controls="${dialogId}" style="display:none"></button>
+    `);
+
+    const issues = await new ButtonValidator().validate(page, 'https://example.com/', 'Desktop Full HD');
+
+    expect(issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        description: 'Button is present but not visible.',
+        selector: expect.stringContaining('button')
+      })
+    ]));
+  });
+
+  test('generates unique selectors for deeply nested buttons with duplicate ids', async ({ page }) => {
+    await page.setContent(`
+      <style>button { width: 20px; height: 20px; color: white; background: black; }</style>
+      <main>
+        <div><div><div><div><div><div><div><div>
+          <button id="duplicate">One</button>
+          <button id="duplicate">Two</button>
+        </div></div></div></div></div></div></div></div>
+      </main>
+    `);
+
+    const issues = await new ButtonValidator().validate(page, 'https://example.com/', 'Desktop Full HD');
+    const targetIssues = issues.filter((issue) => issue.description.includes('smaller than recommended'));
+
+    expect(targetIssues).toHaveLength(2);
+    expect(new Set(targetIssues.map((issue) => issue.selector)).size).toBe(2);
+    for (const issue of targetIssues) {
+      const target = page.locator(issue.selector ?? '');
+      expect(await target.count()).toBe(1);
+      expect(await target.textContent()).toMatch(/^(One|Two)$/);
+    }
+  });
+
   test('attaches annotated evidence and control details for a hidden control', async ({ page }) => {
     await page.setViewportSize({ width: 800, height: 600 });
     await page.setContent(`
