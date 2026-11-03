@@ -21,6 +21,7 @@ import { ContextMenuValidator } from '../validators/ContextMenuValidator';
 import { VideoValidator } from '../validators/VideoValidator';
 import { ensureDir, readJsonFile, safeFileName, writeJsonFile } from '../utils/fileSystem';
 import { collectPerformanceMetrics } from '../utils/performanceMetrics';
+import { markNetworkNeverIdle } from '../utils/evidence';
 import { createIssue } from '../utils/issueFactory';
 import { isReportableIssue } from '../utils/reportFilters';
 import { AuditCheck, AuditIssue, AuditResult, PageInventoryItem, PerformanceMetrics, ViewportResolution } from '../utils/types';
@@ -59,7 +60,7 @@ test.describe('Automated website audit', () => {
           waitUntil: 'domcontentloaded',
           timeout: auditConfig.navigationTimeoutMs
         }).catch(() => null);
-        await page.waitForLoadState('networkidle', { timeout: 10_000 }).catch(() => undefined);
+        await page.waitForLoadState('networkidle', { timeout: 10_000 }).catch(() => markNetworkNeverIdle(page));
 
         const browserViewport = page.viewportSize();
         const runtimeScreen = await page.evaluate(() => ({

@@ -51,6 +51,15 @@ function listFromEnv(name: string, fallback: string[]): string[] {
     .filter(Boolean);
 }
 
+export type RecordingMode = 'off' | 'on' | 'retain-on-failure' | 'on-first-retry';
+
+function recordingModeFromEnv(name: string): RecordingMode {
+  const configured = process.env[name]?.trim().toLowerCase();
+  if (!configured) return 'off';
+  if (['off', 'on', 'retain-on-failure', 'on-first-retry'].includes(configured)) return configured as RecordingMode;
+  throw new Error(`${name} must be off, on, retain-on-failure, or on-first-retry.`);
+}
+
 const qualityGateSeverity = qualityGateSeverityFromEnv();
 const layoutShiftMode = layoutShiftModeFromEnv();
 
@@ -69,13 +78,21 @@ export const auditConfig = {
   defaultMaxDepth: numberFromEnv('MAX_DEPTH', 4),
   linkCheckLimitPerPage: numberFromEnv('LINK_CHECK_LIMIT_PER_PAGE', 150),
   apiValidationConcurrency: numberFromEnv('API_VALIDATION_CONCURRENCY', 8),
+  crawlConcurrency: numberFromEnv('AUDIT_WORKERS', 2),
   imageBlurSharpnessThreshold: numberFromEnv('IMAGE_BLUR_SHARPNESS_THRESHOLD', 24),
   imageUpscaleTolerance: numberFromEnv('IMAGE_UPSCALE_TOLERANCE', 1.15),
-  testTimeoutMs: numberFromEnv('TEST_TIMEOUT_MS', 120_000),
+  // Heavy pages take up to ~2 minutes per viewport on a 2-core server; a timed-out test loses its results.
+  testTimeoutMs: numberFromEnv('TEST_TIMEOUT_MS', 240_000),
   globalTimeoutMs: numberFromEnv('GLOBAL_TIMEOUT_MS', 60 * 60 * 1000),
   actionTimeoutMs: numberFromEnv('ACTION_TIMEOUT_MS', 15_000),
   navigationTimeoutMs: numberFromEnv('NAVIGATION_TIMEOUT_MS', 45_000),
   screenshotMode: process.env.SCREENSHOT_MODE ?? 'on',
+  // Audit findings fail tests on purpose, so retries re-audit pages without learning anything new.
+  testRetries: Math.max(0, Math.floor(Number(process.env.TEST_RETRIES ?? 0)) || 0),
+  // Traces and videos record on every test (CPU) and are kept for every page with findings
+  // (~30 MB each). Findings carry their own screenshots; enable these only to debug the engine.
+  traceMode: recordingModeFromEnv('TRACE_MODE'),
+  videoMode: recordingModeFromEnv('VIDEO_MODE'),
   contextMenuExpectedAlertText: process.env.CONTEXT_MENU_EXPECTED_ALERT_TEXT?.trim(),
   layoutShiftMode,
   layoutShift: {
@@ -157,6 +174,8 @@ export const auditConfig = {
   historyDir: path.join(rootDir, 'reports', 'history'),
   historyRetention: numberFromEnv('REPORT_HISTORY_RETENTION', 12),
   rawResultsDir: path.join(rootDir, 'reports', 'raw-results'),
+  /** Link check results shared by all workers; exists only while an audit run is in progress. */
+  linkCacheDir: path.join(rootDir, 'reports', '.link-cache'),
   allureResultsDir: path.join(rootDir, 'reports', 'allure-results'),
   screenshotDir: path.join(rootDir, 'screenshots'),
   traceDir: path.join(rootDir, 'traces'),

@@ -19,28 +19,46 @@ const reportLabels: Record<string, string> = {
   'website-audit-report.xls': 'Spreadsheet (XLS)'
 };
 
-const rawCache = new Map<string, { mtimeMs: number; result: AuditResult | null }>();
+type RawCacheEntry = { mtimeMs: number; result: AuditResult | null };
+
+/**
+ * Parsed results per directory. Only the two most recently read directories are kept (the
+ * running audit and the one being viewed), so a long-running server's memory stays bounded.
+ */
+const rawCache = new Map<string, Map<string, RawCacheEntry>>();
+const RAW_CACHE_DIRECTORIES = 2;
+
+function directoryCache(dir: string): Map<string, RawCacheEntry> {
+  const cache = rawCache.get(dir) ?? new Map<string, RawCacheEntry>();
+  rawCache.delete(dir);
+  rawCache.set(dir, cache);
+  while (rawCache.size > RAW_CACHE_DIRECTORIES) rawCache.delete(rawCache.keys().next().value as string);
+  return cache;
+}
 
 /** Page/viewport results written by the engine, filtered exactly as its HTML report filters them. */
 export function readRawResults(rawResultsDir: string, since?: Date): AuditResult[] {
   if (!fs.existsSync(rawResultsDir)) return [];
-  return fs
-    .readdirSync(rawResultsDir)
-    .filter((file) => file.endsWith('.json'))
+  const cache = directoryCache(rawResultsDir);
+  const files = fs.readdirSync(rawResultsDir).filter((file) => file.endsWith('.json'));
+  // Each engine run clears raw-results/; forget files that no longer exist.
+  for (const cachedFile of cache.keys()) if (!files.includes(cachedFile)) cache.delete(cachedFile);
+  return files
     .map((file) => {
       const filePath = path.join(rawResultsDir, file);
       const { mtimeMs } = fs.statSync(filePath);
       if (since && mtimeMs < since.getTime()) return null;
-      const cached = rawCache.get(filePath);
+      const cached = cache.get(file);
       if (cached?.mtimeMs === mtimeMs) return cached.result;
       let result: AuditResult | null = null;
       try {
         const parsed = readJsonFile<AuditResult | null>(filePath, null);
-        result = parsed ? sanitizeAuditResultForReporting(parsed) : null;
+        // The assertion register is about three quarters of each file and the dashboard never reads it.
+        result = parsed ? { ...sanitizeAuditResultForReporting(parsed), checks: undefined } : null;
       } catch {
         // The engine may still be writing this file; it is picked up on the next poll.
       }
-      rawCache.set(filePath, { mtimeMs, result });
+      cache.set(file, { mtimeMs, result });
       return result;
     })
     .filter((result): result is AuditResult => Boolean(result));

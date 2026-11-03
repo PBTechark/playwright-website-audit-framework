@@ -1,9 +1,10 @@
-FROM mcr.microsoft.com/playwright:latest
+# Keep this tag equal to @playwright/test in package-lock.json so the bundled browsers match.
+FROM mcr.microsoft.com/playwright:v1.60.0-noble
 
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm install
+RUN npm ci
 
 COPY . .
 

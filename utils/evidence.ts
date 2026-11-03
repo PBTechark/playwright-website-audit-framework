@@ -5,6 +5,16 @@ import { auditConfig } from '../config/auditConfig';
 import { ensureDir, safeFileName, toRelativePath } from './fileSystem';
 import { ScreenshotEvidence } from './types';
 
+/**
+ * Pages whose network never went idle during the initial load (analytics beacons, chat widgets,
+ * long polling). Waiting for networkidle again before each screenshot only burns its full timeout.
+ */
+const neverIdlePages = new WeakSet<Page>();
+
+export function markNetworkNeverIdle(page: Page): void {
+  neverIdlePages.add(page);
+}
+
 export class EvidenceManager {
   constructor(
     private readonly page: Page,
@@ -307,7 +317,9 @@ export class EvidenceManager {
       }
     }, fullPage).catch(() => undefined);
     await this.page.waitForLoadState('domcontentloaded', { timeout: 5_000 }).catch(() => undefined);
-    await this.page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => undefined);
+    if (!neverIdlePages.has(this.page)) {
+      await this.page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => undefined);
+    }
   }
 
   private makePath(label: string): string {
