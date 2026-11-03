@@ -117,18 +117,27 @@ test('reports persistent human-visible in-load movement with importance evidence
   }
 });
 
-test('detects a corner image obstructing a control in iPad portrait only', async ({ page }) => {
+test('detects and identifies the control and image when a corner image obstructs a control', async ({ page }) => {
   await page.setContent(`
     <style>
       select { position:absolute; top:90px; left:50%; transform:translateX(-50%); width:calc(100% - 54px); max-width:970px; height:21px; }
       img { position:fixed; right:0; top:0; width:100px; height:100px; }
     </style>
     <select id="dropdown" aria-label="Example"><option>Example</option></select>
-    <a href="https://example.com"><img alt="Corner ribbon" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100' height='100'%3E%3Crect width='100' height='100' fill='green'/%3E%3C/svg%3E"></a>
+    <img id="corner-ribbon" alt="Corner ribbon" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100' height='100'%3E%3Crect width='100' height='100' fill='green'/%3E%3C/svg%3E">
   `);
 
   await page.setViewportSize({ width: 1024, height: 1366 });
   const portrait = await detectDomDefects(page);
+  const overlap = portrait.find((item) => item.type === 'Element Overlap');
+  expect(overlap?.selector).toBe('#dropdown');
+  expect(overlap?.details).toMatchObject({
+    occludedSelector: '#dropdown',
+    occludingSelector: '#corner-ribbon',
+    imageObstructsControl: true
+  });
+  expect(await page.locator(overlap?.selector ?? '').count()).toBe(1);
+  expect(await page.locator(String(overlap?.details.occludingSelector)).count()).toBe(1);
   expect(portrait).toEqual(expect.arrayContaining([
     expect.objectContaining({
       type: 'Element Overlap',
@@ -144,6 +153,50 @@ test('detects a corner image obstructing a control in iPad portrait only', async
   await page.setViewportSize({ width: 1366, height: 1024 });
   const landscape = await detectDomDefects(page);
   expect(landscape.filter((item) => item.type === 'Element Overlap')).toHaveLength(0);
+});
+
+test('ignores a small edge overlap that does not block the control center', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.setContent(`
+    <style>
+      #occluder { position:absolute; left:771px; top:59px; width:87px; height:109px; z-index:2; }
+      #target { position:absolute; left:744px; top:71px; width:38px; height:17px; }
+    </style>
+    <a id="occluder" href="/menu">Menu entry</a>
+    <a id="target" href="/article">Article link</a>
+  `);
+
+  const defects = await detectDomDefects(page);
+
+  expect(defects.filter((item) => item.type === 'Element Overlap')).toHaveLength(0);
+});
+
+test('generates unique selectors for deeply nested elements and duplicate ids', async ({ page }) => {
+  await page.setContent(`
+    <main>
+      <div><div><div><div><div><div><div><div>
+        <section id="duplicate" class="feature-card" style="width:420px;height:220px;border:1px solid #bbb;"></section>
+        <section id="duplicate" class="feature-card" style="width:420px;height:220px;border:1px solid #bbb;"></section>
+      </div></div></div></div></div></div></div></div>
+    </main>
+  `);
+
+  const defects = await detectDomDefects(page);
+  const cards = defects.filter((item) => item.type === 'Empty Container');
+
+  expect(cards).toHaveLength(2);
+  for (const defect of cards) {
+    const match = await page.evaluate((selector) => {
+      const elements = document.querySelectorAll(selector);
+      return {
+        count: elements.length,
+        className: elements[0]?.getAttribute('class'),
+        id: elements[0]?.getAttribute('id')
+      };
+    }, defect.selector);
+    expect(match).toEqual({ count: 1, className: 'feature-card', id: 'duplicate' });
+  }
+  expect(new Set(cards.map((item) => item.selector)).size).toBe(2);
 });
 
 test('does not report content that scrolls underneath a higher sticky header', async ({ page }) => {

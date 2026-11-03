@@ -30,7 +30,10 @@ export function createIssue(input: {
   return {
     id: crypto.createHash('sha1').update(basis).digest('hex').slice(0, 12),
     category: input.category,
-    severity: input.severity ?? classifySeverity(input.category, input.description, detailsForSeverity),
+    severity:
+      input.category === 'Technical'
+        ? 'Low'
+        : input.severity ?? classifySeverity(input.category, input.description, detailsForSeverity),
     targetName: input.targetName,
     targetBaseUrl: input.targetBaseUrl,
     url: input.url,

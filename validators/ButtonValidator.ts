@@ -7,6 +7,7 @@ type ButtonSnapshot = {
   selector: string;
   text: string;
   visible: boolean;
+  expectedResponsiveHidden: boolean;
   disabled: boolean;
   tagName: string;
   role?: string;
@@ -27,6 +28,7 @@ type HoverState = {
   color: string;
   backgroundColor: string;
   contrastRatio: number | null;
+  baselineContrastRatio?: number | null;
   rect: { width: number; height: number };
   textRect: { width: number; height: number } | null;
   reason?: string;
@@ -38,13 +40,24 @@ export class ButtonValidator {
       const attributeSelector = (element: Element, attribute: string, value: string): string =>
         `${element.tagName.toLowerCase()}[${attribute}="${CSS.escape(value)}"]`;
       const selectorFor = (element: Element): string => {
+        const uniquelySelectsElement = (selector: string): boolean => {
+          try {
+            const matches = document.querySelectorAll(selector);
+            return matches.length === 1 && matches[0] === element;
+          } catch {
+            return false;
+          }
+        };
         for (const attribute of ['data-testid', 'data-test', 'aria-label', 'name', 'href']) {
           const value = element.getAttribute(attribute);
           if (!value) continue;
           const candidate = attributeSelector(element, attribute, value);
-          if (document.querySelectorAll(candidate).length === 1) return candidate;
+          if (uniquelySelectsElement(candidate)) return candidate;
         }
-        if (element.id) return `#${CSS.escape(element.id)}`;
+        if (element.id) {
+          const candidate = `#${CSS.escape(element.id)}`;
+          if (uniquelySelectsElement(candidate)) return candidate;
+        }
         const parts: string[] = [];
         let node: Element | null = element;
         while (node && node !== document.body) {
@@ -53,6 +66,8 @@ export class ButtonValidator {
             : [];
           parts.unshift(`${node.tagName.toLowerCase()}:nth-of-type(${Math.max(1, siblings.indexOf(node) + 1)})`);
           node = node.parentElement;
+          const candidate = `body > ${parts.join(' > ')}`;
+          if (node === document.body && uniquelySelectsElement(candidate)) return candidate;
         }
         return `body > ${parts.join(' > ')}`;
       };
@@ -68,6 +83,61 @@ export class ButtonValidator {
           style.display !== 'none' &&
           style.visibility !== 'hidden' &&
           Number(style.opacity) > 0.01;
+      };
+      const hasVisibleControlledNavigation = (element: HTMLElement): boolean => {
+        if (isVisible(element)) return false;
+        const targets = new Set<Element>();
+        const controlledIds = element.getAttribute('aria-controls')?.trim().split(/\s+/) ?? [];
+        for (const id of controlledIds) {
+          const target = document.getElementById(id);
+          if (target) targets.add(target);
+        }
+
+        for (const attribute of ['data-target', 'data-bs-target']) {
+          const selector = element.getAttribute(attribute)?.trim();
+          if (!selector) continue;
+          try {
+            document.querySelectorAll(selector).forEach((target) => targets.add(target));
+          } catch {
+            // Invalid site-provided selector attributes are ignored; other reference types still apply.
+          }
+        }
+
+        const href = element.getAttribute('href')?.trim();
+        if (href?.includes('#')) {
+          try {
+            const destination = new URL(href, document.baseURI);
+            if (
+              destination.origin === window.location.origin &&
+              destination.pathname === window.location.pathname &&
+              destination.search === window.location.search &&
+              destination.hash.length > 1
+            ) {
+              const target = document.getElementById(decodeURIComponent(destination.hash.slice(1)));
+              if (target) targets.add(target);
+            }
+          } catch {
+            // Malformed href values cannot identify an in-document controlled region.
+          }
+        }
+
+        return Array.from(targets).some((target) => {
+          if (target === element || !(target instanceof HTMLElement)) return false;
+          const rect = target.getBoundingClientRect();
+          if (rect.width <= 1 || rect.height <= 1) return false;
+          let current: HTMLElement | null = target;
+          while (current && current !== document.documentElement) {
+            const style = window.getComputedStyle(current);
+            if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) <= 0.01) {
+              return false;
+            }
+            current = current.parentElement;
+          }
+          return target.matches('nav,[role="navigation"]') ||
+            Boolean(target.querySelector('nav,[role="navigation"]')) ||
+            (target.matches('[class*="navbar-collapse" i],[class*="nav-menu" i]') &&
+              Boolean(target.querySelector('a[href],button,[role="link"]')));
+        });
       };
       const looksLikeCta = (element: HTMLElement): boolean => {
         const rect = element.getBoundingClientRect();
@@ -126,6 +196,7 @@ export class ButtonValidator {
               (button instanceof HTMLInputElement ? button.value : '') ||
               '',
             visible: isVisible(button),
+            expectedResponsiveHidden: hasVisibleControlledNavigation(button),
             disabled,
             tagName: button.tagName.toLowerCase(),
             role: button.getAttribute('role') ?? undefined,
@@ -162,7 +233,7 @@ export class ButtonValidator {
         evidenceDetails: shot ? [shot] : []
       });
 
-      if (!button.visible) {
+      if (!button.visible && !button.expectedResponsiveHidden) {
         const shot = await captureIssueEvidence();
         issues.push(
           createIssue({
@@ -217,7 +288,7 @@ export class ButtonValidator {
           );
         }
       }
-      if (!button.disabled && (button.boundingBox.width < 32 || button.boundingBox.height < 32)) {
+      if (button.visible && !button.disabled && (button.boundingBox.width < 32 || button.boundingBox.height < 32)) {
         const shot = await captureIssueEvidence();
         issues.push(
           createIssue({
@@ -240,9 +311,7 @@ export class ButtonValidator {
   private async inspectHoverState(page: Page, selector: string): Promise<HoverState> {
     const locator = page.locator(selector).first();
     await locator.scrollIntoViewIfNeeded({ timeout: 5_000 }).catch(() => undefined);
-    await locator.hover({ timeout: 5_000 });
-    await page.waitForTimeout(350).catch(() => undefined);
-    return page.evaluate((cssSelector) => {
+    const readState = () => page.evaluate((cssSelector) => {
       const element = document.querySelector<HTMLElement>(cssSelector);
       if (!element) {
         return {
@@ -277,22 +346,25 @@ export class ButtonValidator {
       const contrast = (fg: string, bg: string): number | null => {
         const foreground = parseRgb(fg);
         const background = parseRgb(bg);
-        if (!foreground || !background || foreground[3] < 0.05 || background[3] < 0.05) return null;
+        if (!foreground || !background || foreground[3] < 0.99 || background[3] < 0.99) return null;
         const first = luminance(foreground);
         const second = luminance(background);
         return Number(((Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05)).toFixed(2));
       };
-      const effectiveBackground = (start: HTMLElement): string => {
+      const effectiveBackground = (start: HTMLElement): string | null => {
         let current: HTMLElement | null = start;
         while (current && current !== document.documentElement) {
-          const color = getComputedStyle(current).backgroundColor;
+          const currentStyle = getComputedStyle(current);
+          if (currentStyle.backgroundImage !== 'none') return null;
+          if (Number(currentStyle.opacity) < 0.99) return null;
+          const color = currentStyle.backgroundColor;
           const parsed = parseRgb(color);
           if (parsed && parsed[3] > 0.05) return color;
           current = current.parentElement;
         }
         return 'rgb(255, 255, 255)';
       };
-      const textNodeRange = (root: HTMLElement): DOMRect | null => {
+      const textNodeRange = (root: HTMLElement): { rect: DOMRect; element: HTMLElement } | null => {
         const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
         let node = walker.nextNode();
         while (node) {
@@ -301,7 +373,19 @@ export class ButtonValidator {
             range.selectNodeContents(node);
             const rect = range.getBoundingClientRect();
             range.detach();
-            return rect;
+            const parent = node.parentElement;
+            if (parent) {
+              const style = getComputedStyle(parent);
+              if (
+                rect.width > 1 &&
+                rect.height > 1 &&
+                style.display !== 'none' &&
+                style.visibility !== 'hidden' &&
+                Number(style.opacity) > 0.01
+              ) {
+                return { rect, element: parent };
+              }
+            }
           }
           node = walker.nextNode();
         }
@@ -310,10 +394,12 @@ export class ButtonValidator {
 
       const style = getComputedStyle(element);
       const rect = element.getBoundingClientRect();
-      const textRect = textNodeRange(element);
+      const textNode = textNodeRange(element);
+      const textRect = textNode?.rect ?? null;
+      const textStyle = textNode ? getComputedStyle(textNode.element) : style;
       const text = (element.innerText || element.textContent || element.getAttribute('aria-label') || '').trim();
-      const backgroundColor = effectiveBackground(element);
-      const contrastRatio = contrast(style.color, backgroundColor);
+      const backgroundColor = textNode ? effectiveBackground(textNode.element) : null;
+      const contrastRatio = backgroundColor ? contrast(textStyle.color, backgroundColor) : null;
       const visible = rect.width > 0 &&
         rect.height > 0 &&
         style.display !== 'none' &&
@@ -327,7 +413,7 @@ export class ButtonValidator {
       } else if (textRect && (textRect.width <= 1 || textRect.height <= 1)) {
         reason = `Hover state collapses the text box to ${textRect.width.toFixed(1)}x${textRect.height.toFixed(1)}.`;
       } else if (contrastRatio !== null && contrastRatio < 3) {
-        reason = `Hover state text contrast is ${contrastRatio}:1 against ${backgroundColor}; text color is ${style.color}.`;
+        reason = `Hover state text contrast is ${contrastRatio}:1 against ${backgroundColor}; text color is ${textStyle.color}.`;
       }
       return {
         text,
@@ -335,14 +421,30 @@ export class ButtonValidator {
         display: style.display,
         visibility: style.visibility,
         opacity: Number(style.opacity),
-        color: style.color,
-        backgroundColor,
+        color: textStyle.color,
+        backgroundColor: backgroundColor ?? 'unmeasurable',
         contrastRatio,
         rect: { width: Number(rect.width.toFixed(1)), height: Number(rect.height.toFixed(1)) },
         textRect: textRect ? { width: Number(textRect.width.toFixed(1)), height: Number(textRect.height.toFixed(1)) } : null,
         reason
       };
     }, selector);
+    const baseline = await readState();
+    await locator.hover({ timeout: 5_000 });
+    await page.waitForTimeout(350).catch(() => undefined);
+    const hovered = await readState();
+    const contrastBecameLow =
+      baseline.contrastRatio !== null &&
+      baseline.contrastRatio >= 3 &&
+      hovered.contrastRatio !== null &&
+      hovered.contrastRatio < 3;
+    return {
+      ...hovered,
+      baselineContrastRatio: baseline.contrastRatio,
+      reason:
+        hovered.reason?.startsWith('Hover state text contrast') && !contrastBecameLow
+          ? undefined
+          : hovered.reason
+    };
   }
-
 }

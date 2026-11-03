@@ -98,15 +98,28 @@ export class ContentIntegrityAudit {
         '[class*="language-"]', '[class*="syntax-highlight"]', '[data-highlighted="yes"]', '[data-language]'
       ].join(',');
       const selectorFor = (element: Element): string => {
-        if (element.id) return `#${CSS.escape(element.id)}`;
+        const uniquelySelectsElement = (selector: string): boolean => {
+          try {
+            const matches = document.querySelectorAll(selector);
+            return matches.length === 1 && matches[0] === element;
+          } catch {
+            return false;
+          }
+        };
+        if (element.id) {
+          const candidate = `#${CSS.escape(element.id)}`;
+          if (uniquelySelectsElement(candidate)) return candidate;
+        }
         const parts: string[] = [];
         let node: Element | null = element;
-        while (node && node !== document.body && parts.length < 6) {
+        while (node && node !== document.body) {
           const siblings = node.parentElement
             ? Array.from(node.parentElement.children).filter((item) => item.tagName === node!.tagName)
             : [];
           parts.unshift(`${node.tagName.toLowerCase()}:nth-of-type(${Math.max(1, siblings.indexOf(node) + 1)})`);
           node = node.parentElement;
+          const candidate = `body > ${parts.join(' > ')}`;
+          if (node === document.body && uniquelySelectsElement(candidate)) return candidate;
         }
         return `body > ${parts.join(' > ')}`;
       };

@@ -94,18 +94,36 @@ async function collectLayoutShiftSnapshot(
     const viewportArea = Math.max(1, viewportWidth * viewportHeight);
 
     const selectorFor = (element: Element): string => {
-      if (element.id) return `#${CSS.escape(element.id)}`;
-      const testIdAttribute = element.hasAttribute('data-testid') ? 'data-testid' : 'data-test';
-      const testId = element.getAttribute(testIdAttribute);
-      if (testId) return `[${testIdAttribute}="${CSS.escape(testId)}"]`;
+      const uniquelySelectsElement = (selector: string): boolean => {
+        try {
+          const matches = document.querySelectorAll(selector);
+          return matches.length === 1 && matches[0] === element;
+        } catch {
+          return false;
+        }
+      };
+      for (const [attribute, value] of [
+        ['id', element.id],
+        ['data-testid', element.getAttribute('data-testid') ?? ''],
+        ['data-test', element.getAttribute('data-test') ?? '']
+      ]) {
+        if (!value) continue;
+        const candidate = attribute === 'id'
+          ? `#${CSS.escape(value)}`
+          : `[${attribute}="${CSS.escape(value)}"]`;
+        if (uniquelySelectsElement(candidate)) return candidate;
+      }
+
       const parts: string[] = [];
       let node: Element | null = element;
-      while (node && node !== document.body && parts.length < 6) {
+      while (node && node !== document.body) {
         const siblings = node.parentElement
           ? Array.from(node.parentElement.children).filter((item) => item.tagName === node!.tagName)
           : [];
         parts.unshift(`${node.tagName.toLowerCase()}:nth-of-type(${Math.max(1, siblings.indexOf(node) + 1)})`);
         node = node.parentElement;
+        const candidate = `body > ${parts.join(' > ')}`;
+        if (node === document.body && uniquelySelectsElement(candidate)) return candidate;
       }
       return `body > ${parts.join(' > ')}`;
     };
@@ -519,18 +537,36 @@ export async function detectDomDefects(page: Page): Promise<DomDefect[]> {
     const viewportWidth = document.documentElement.clientWidth;
     const viewportHeight = window.innerHeight;
     const selectorFor = (element: Element): string => {
-      if (element.id) return `#${CSS.escape(element.id)}`;
-      const testIdAttribute = element.hasAttribute('data-testid') ? 'data-testid' : 'data-test';
-      const testId = element.getAttribute(testIdAttribute);
-      if (testId) return `[${testIdAttribute}="${CSS.escape(testId)}"]`;
+      const uniquelySelectsElement = (selector: string): boolean => {
+        try {
+          const matches = document.querySelectorAll(selector);
+          return matches.length === 1 && matches[0] === element;
+        } catch {
+          return false;
+        }
+      };
+      for (const [attribute, value] of [
+        ['id', element.id],
+        ['data-testid', element.getAttribute('data-testid') ?? ''],
+        ['data-test', element.getAttribute('data-test') ?? '']
+      ]) {
+        if (!value) continue;
+        const candidate = attribute === 'id'
+          ? `#${CSS.escape(value)}`
+          : `[${attribute}="${CSS.escape(value)}"]`;
+        if (uniquelySelectsElement(candidate)) return candidate;
+      }
+
       const parts: string[] = [];
       let node: Element | null = element;
-      while (node && node !== document.body && parts.length < 6) {
+      while (node && node !== document.body) {
         const siblings = node.parentElement
           ? Array.from(node.parentElement.children).filter((item) => item.tagName === node!.tagName)
           : [];
         parts.unshift(`${node.tagName.toLowerCase()}:nth-of-type(${Math.max(1, siblings.indexOf(node) + 1)})`);
         node = node.parentElement;
+        const candidate = `body > ${parts.join(' > ')}`;
+        if (node === document.body && uniquelySelectsElement(candidate)) return candidate;
       }
       return `body > ${parts.join(' > ')}`;
     };
@@ -932,6 +968,7 @@ export async function detectDomDefects(page: Page): Promise<DomDefect[]> {
       criticalEdgeBlocked: boolean;
       firstBox: Box;
       secondBox: Box;
+      overlapBox: Box;
     };
     const interactiveSelector = 'a,button,input,select,textarea,[role="button"]';
     const toBox = (rect: DOMRect): Box => ({
@@ -1004,7 +1041,8 @@ export async function detectDomDefects(page: Page): Promise<DomDefect[]> {
           criticalEdgeIntersects && isPaintedAbove(occluding, occluded, criticalPoint)
         );
         const coverage = area / Math.max(1, rect.width * rect.height);
-        const hasActionableImpact = centerBlocked || coverage >= 0.15 || criticalEdgeBlocked;
+        const hasActionableImpact =
+          centerBlocked || criticalEdgeBlocked || (coverage >= 0.5 && area >= 300);
         if (!hasActionableImpact) return null;
         return {
           occluded,
@@ -1041,7 +1079,13 @@ export async function detectDomDefects(page: Page): Promise<DomDefect[]> {
         centerBlocked: impact.centerBlocked,
         criticalEdgeBlocked: impact.criticalEdgeBlocked,
         firstBox: toBox(firstRect),
-        secondBox: toBox(secondRect)
+        secondBox: toBox(secondRect),
+        overlapBox: {
+          x: Number(left.toFixed(2)),
+          y: Number(top.toFixed(2)),
+          width: Number(width.toFixed(2)),
+          height: Number(height.toFixed(2))
+        }
       };
     };
     const boxDelta = (first: Box, second: Box): number => Math.max(
@@ -1077,7 +1121,7 @@ export async function detectDomDefects(page: Page): Promise<DomDefect[]> {
         (firstIsImage || secondIsImage) && overlap.occluded.matches(interactiveSelector);
       defects.push({
         type: 'Element Overlap',
-        selector: `${selectorFor(overlap.first)} / ${selectorFor(overlap.second)}`,
+        selector: selectorFor(overlap.occluded),
         description: 'An element is painted above an interactive control and blocks its actionable area.',
         details: {
           overlapArea: Math.round(overlap.area),
@@ -1093,6 +1137,7 @@ export async function detectDomDefects(page: Page): Promise<DomDefect[]> {
           occludingSelector: selectorFor(overlap.occluding),
           firstBox: overlap.firstBox,
           secondBox: overlap.secondBox,
+          overlapBox: overlap.overlapBox,
           imageObstructsControl
         }
       });

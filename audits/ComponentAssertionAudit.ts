@@ -43,12 +43,27 @@ export class ComponentAssertionAudit {
         '[id*="chat" i]'
       ].join(',')));
       const selector = (el: Element) => {
-        if (el.id) return `#${CSS.escape(el.id)}`;
-        const parts: string[] = []; let node: Element | null = el;
-        while (node && node !== document.body && parts.length < 5) {
+        const uniquelySelectsElement = (candidate: string): boolean => {
+          try {
+            const matches = document.querySelectorAll(candidate);
+            return matches.length === 1 && matches[0] === el;
+          } catch {
+            return false;
+          }
+        };
+        if (el.id) {
+          const candidate = `#${CSS.escape(el.id)}`;
+          if (uniquelySelectsElement(candidate)) return candidate;
+        }
+        const parts: string[] = [];
+        let node: Element | null = el;
+        while (node && node !== document.body) {
           const tag = node.tagName.toLowerCase();
           const siblings = node.parentElement ? Array.from(node.parentElement.children).filter(x => x.tagName === node!.tagName) : [];
-          parts.unshift(`${tag}:nth-of-type(${Math.max(1, siblings.indexOf(node) + 1)})`); node = node.parentElement;
+          parts.unshift(`${tag}:nth-of-type(${Math.max(1, siblings.indexOf(node) + 1)})`);
+          node = node.parentElement;
+          const candidate = `body > ${parts.join(' > ')}`;
+          if (node === document.body && uniquelySelectsElement(candidate)) return candidate;
         }
         return `body > ${parts.join(' > ')}`;
       };
