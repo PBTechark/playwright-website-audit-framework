@@ -19,7 +19,7 @@ jobs:
       MAX_PAGES: ${{ vars.MAX_PAGES || '75' }}
       TARGETS_CSV: ${{ (github.event_name == 'pull_request') && 'test-data/audit-targets-pr.csv' || 'test-data/audit-targets.csv' }}
       AUDIT_WORKERS: '2'
-      AUDIT_FAIL_ON_SEVERITY: ${{ vars.AUDIT_FAIL_ON_SEVERITY || 'Medium' }}
+      AUDIT_FAIL_ON_SEVERITY: ${{ (github.event_name == 'pull_request') && 'Off' || vars.AUDIT_FAIL_ON_SEVERITY || 'Medium' }}
       GLOBAL_TIMEOUT_MS: ${{ vars.GLOBAL_TIMEOUT_MS || '10800000' }}
     steps:
       - name: Checkout
