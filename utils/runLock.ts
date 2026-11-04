@@ -27,8 +27,9 @@ export function runLockHolder(): number | null {
 
 export function acquireRunLock(): void {
   ensureDir(path.dirname(lockPath));
-  if (runLockHolder() === process.pid) return;
-  if (runLockHolder() === null) fs.rmSync(lockPath, { force: true });
+  const holder = runLockHolder();
+  if (holder === process.pid) return;
+  if (holder === null) fs.rmSync(lockPath, { force: true });
   try {
     // 'wx' fails if another run created the lock first, so two runs starting together cannot both win.
     fs.writeFileSync(lockPath, String(process.pid), { encoding: 'utf-8', flag: 'wx' });

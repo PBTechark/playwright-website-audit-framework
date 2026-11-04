@@ -1176,7 +1176,7 @@ export class HtmlReportGenerator {
     a.chip:hover, .chip-button:hover { border-color:var(--accent-ink); color:var(--accent-ink); text-decoration:none; cursor:pointer; }
 
     .evidence-group + .evidence-group { margin-top:8px; }
-[hidden] { display:none !important; }
+    [hidden] { display:none !important; }
     .evidence-list { display:flex; flex-wrap:wrap; gap:12px; }
     .thumb-wrap { display:flex; flex-direction:column; gap:4px; align-items:flex-start; }
     .thumb { display:flex; flex-direction:column; width:168px; padding:0; overflow:hidden; border:1px solid var(--line); border-radius:var(--radius-sm); background:var(--panel); color:var(--text); text-align:left; cursor:zoom-in; }

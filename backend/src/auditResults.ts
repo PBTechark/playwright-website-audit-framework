@@ -41,8 +41,9 @@ export function readRawResults(rawResultsDir: string, since?: Date): AuditResult
   if (!fs.existsSync(rawResultsDir)) return [];
   const cache = directoryCache(rawResultsDir);
   const files = fs.readdirSync(rawResultsDir).filter((file) => file.endsWith('.json'));
+  const present = new Set(files);
   // Each engine run clears raw-results/; forget files that no longer exist.
-  for (const cachedFile of cache.keys()) if (!files.includes(cachedFile)) cache.delete(cachedFile);
+  for (const cachedFile of cache.keys()) if (!present.has(cachedFile)) cache.delete(cachedFile);
   return files
     .map((file) => {
       const filePath = path.join(rawResultsDir, file);
