@@ -1,20 +1,25 @@
+import fs from 'fs';
 import { HtmlReportGenerator } from './reporters/HtmlReportGenerator';
 import { auditConfig } from './config/auditConfig';
-import { listJsonFiles, readJsonFile } from './utils/fileSystem';
 import { Logger } from './utils/logger';
 import { AuditResult } from './utils/types';
 import { isBlockingSeverity, qualityGateLabel } from './utils/severityGate';
 import { isReportableIssue } from './utils/reportFilters';
+import { releaseRunLock } from './utils/runLock';
 
 async function globalTeardown(): Promise<void> {
   const logger = new Logger('GlobalTeardown');
   logger.info('Generating website audit reports');
-  await new HtmlReportGenerator().generate();
+  let results: AuditResult[];
+  try {
+    results = await new HtmlReportGenerator().generate();
+  } finally {
+    fs.rmSync(auditConfig.linkCacheDir, { recursive: true, force: true });
+    releaseRunLock();
+  }
 
   if (auditConfig.qualityGateSeverity !== 'Off') {
-    const results = listJsonFiles(auditConfig.rawResultsDir)
-      .map((file) => readJsonFile<AuditResult | null>(file, null))
-      .filter((result): result is AuditResult => Boolean(result));
+    // Reuses the results the reports were built from instead of parsing every raw file again.
     const blockingIssues = results
       .flatMap((result) => result.issues)
       .filter(isReportableIssue)

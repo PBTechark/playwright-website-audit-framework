@@ -1,5 +1,9 @@
+import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
 import { APIRequestContext, Page } from '@playwright/test';
 import { auditConfig } from '../config/auditConfig';
+import { readJsonFile } from '../utils/fileSystem';
 import { createIssue } from '../utils/issueFactory';
 import { AuditIssue, LinkFinding } from '../utils/types';
 import { isInternalNavigableUrl, normalizeUrl, uniqueUrls } from '../utils/urlUtils';
@@ -141,7 +145,34 @@ export class LinkValidator {
     return { issues, findings };
   }
 
+  /**
+   * A link's status depends only on its destination, so one check per run serves every page,
+   * viewport and worker. The cache is on disk because Playwright replaces the worker process after
+   * every failed test. Network errors and timeouts may be transient, so only HTTP answers are shared.
+   */
   private async checkLink(sourceUrl: string, destinationUrl: string, isLogo = false): Promise<LinkFinding> {
+    if (!fs.existsSync(auditConfig.linkCacheDir)) return this.fetchLink(sourceUrl, destinationUrl, isLogo);
+    const cachePath = path.join(
+      auditConfig.linkCacheDir,
+      `${crypto.createHash('sha1').update(destinationUrl).digest('hex')}.json`
+    );
+    const cached = readJsonFile<LinkFinding | null>(cachePath, null);
+    if (cached) {
+      const reused: LinkFinding = { ...cached, sourceUrl };
+      if (isLogo) reused.linkType = 'logo';
+      else delete reused.linkType;
+      return reused;
+    }
+    const finding = await this.fetchLink(sourceUrl, destinationUrl, isLogo);
+    if (finding.statusCode !== undefined) {
+      // Write then rename, so a worker reading at the same moment never sees a partial file.
+      fs.writeFileSync(`${cachePath}.${process.pid}`, JSON.stringify(finding), 'utf-8');
+      fs.renameSync(`${cachePath}.${process.pid}`, cachePath);
+    }
+    return finding;
+  }
+
+  private async fetchLink(sourceUrl: string, destinationUrl: string, isLogo = false): Promise<LinkFinding> {
     const redirectChain: string[] = [];
     const visited = new Set<string>();
     let currentUrl = destinationUrl;

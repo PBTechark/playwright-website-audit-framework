@@ -5,10 +5,11 @@
   "private": true,
   "type": "commonjs",
   "scripts": {
-    "audit": "playwright test --config=playwright.config.ts",
+    "audit": "cross-env NODE_OPTIONS=--max-old-space-size=2560 playwright test --config=playwright.config.ts",
     "audit:open": "npm run audit && npm run show-report",
-    "audit:smoke": "cross-env TARGETS_CSV=test-data/audit-targets-pr.csv playwright test --config=playwright.config.ts",
+    "audit:smoke": "cross-env NODE_OPTIONS=--max-old-space-size=2560 TARGETS_CSV=test-data/audit-targets-pr.csv playwright test --config=playwright.config.ts",
     "test:unit": "playwright test --config=playwright.unit.config.ts",
+    "share": "bash share.sh",
     "build": "tsc -p tsconfig.json",
     "lint": "eslint . --ext .ts",
     "format": "prettier --write .",

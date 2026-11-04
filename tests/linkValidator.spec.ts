@@ -1,6 +1,8 @@
 import { expect, request, test } from '@playwright/test';
+import fs from 'fs';
 import { createServer } from 'http';
 import { AddressInfo } from 'net';
+import { auditConfig } from '../config/auditConfig';
 import { LinkValidator } from '../validators/LinkValidator';
 
 test('reports visible CTA anchors that use placeholder href values', async ({ page }) => {
@@ -111,5 +113,37 @@ test('reports a header logo that resolves to another hostname and includes its r
     await new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));
     });
+  }
+});
+
+test('checks each link destination once per run and reuses the status for later pages', async ({ page }) => {
+  let hits = 0;
+  const server = createServer((_request, response) => {
+    hits += 1;
+    response.writeHead(404, { 'content-type': 'text/html' });
+    response.end('Not found');
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const api = await request.newContext();
+  fs.mkdirSync(auditConfig.linkCacheDir, { recursive: true });
+
+  try {
+    await page.setContent(`<a href="${origin}/missing">Missing page</a>`);
+    const validator = new LinkValidator(api, `${origin}/`);
+    const first = await validator.validate(page, `${origin}/one`, 'Desktop');
+    const second = await validator.validate(page, `${origin}/two`, 'Mobile Portrait');
+
+    expect(hits).toBe(1);
+    for (const [result, source] of [[first, `${origin}/one`], [second, `${origin}/two`]] as const) {
+      expect(result.findings).toEqual([
+        expect.objectContaining({ sourceUrl: source, destinationUrl: `${origin}/missing`, statusCode: 404 })
+      ]);
+      expect(result.issues[0].description).toContain('Internal link has a failure');
+    }
+  } finally {
+    fs.rmSync(auditConfig.linkCacheDir, { recursive: true, force: true });
+    await api.dispose();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });

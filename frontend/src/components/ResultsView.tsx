@@ -72,6 +72,8 @@ export function ResultsView({ results }: { results: AuditResultsResponse }) {
         <PagesTab
           results={results}
           openImage={openImage}
+          viewport={filters.viewport}
+          setViewport={(viewport) => setFilters({ ...filters, viewport })}
           showIssues={(page) => {
             setFilters({ ...emptyFilters, page });
             setTab('issues');
@@ -267,6 +269,7 @@ function IssuesTab({
                 group={group}
                 defaultOpen={expandAll ?? index === 0}
                 showPage={pages.length > 1}
+                viewport={filters.viewport}
                 auditId={results.audit.id}
                 openImage={openImage}
               />
@@ -312,18 +315,30 @@ function IssueRow({
   group,
   defaultOpen,
   showPage,
+  viewport,
   auditId,
   openImage
 }: {
   group: IssueGroup;
   defaultOpen: boolean;
   showPage: boolean;
+  /** Active viewport filter; when set, only that viewport's screenshots are shown. */
+  viewport: string;
   auditId: string;
   openImage: OpenImage;
 }) {
   const first = group.findings[0];
   const selectors = unique(group.findings.map((finding) => finding.selector).filter((value): value is string => Boolean(value)));
-  const evidence = group.findings.flatMap((finding) => unique(finding.evidence).map((path) => ({ path, viewport: finding.viewport })));
+  // Several findings in one viewport often share a screenshot (the full page). Each is listed once:
+  // duplicate React keys would also leave stale thumbnails behind when the viewport filter changes.
+  const evidence = unique(
+    group.findings
+      .filter((finding) => !viewport || finding.viewport === viewport)
+      .flatMap((finding) => finding.evidence.map((path) => `${finding.viewport}\n${path}`))
+  ).map((key) => {
+    const [itemViewport, path] = key.split('\n');
+    return { path, viewport: itemViewport };
+  });
   const actual = first.actual ? splitMeasuredDetails(first.actual) : null;
   const where = group.viewports.length <= 2 ? group.viewports.join(' and ') : plural(group.viewports.length, 'viewport');
 
@@ -415,7 +430,7 @@ function IssueRow({
 
           {evidence.length > 0 && (
             <div>
-              <div className="caption mb-2">Evidence</div>
+              <div className="caption mb-2">{viewport ? `Evidence, ${viewport} only` : 'Evidence'}</div>
               <div className="flex flex-wrap gap-3">
                 {evidence.slice(0, 10).map((item) => (
                   <Thumbnail
@@ -437,18 +452,70 @@ function IssueRow({
   );
 }
 
-function PagesTab({ results, openImage, showIssues }: { results: AuditResultsResponse; openImage: OpenImage; showIssues: (page: string) => void }) {
+function PagesTab({
+  results,
+  openImage,
+  viewport,
+  setViewport,
+  showIssues
+}: {
+  results: AuditResultsResponse;
+  openImage: OpenImage;
+  /** Shared with the Issues tab, so both always show the same viewport. */
+  viewport: string;
+  setViewport: (viewport: string) => void;
+  showIssues: (page: string) => void;
+}) {
   if (!results.pages.length) return <EmptyState title="No pages were audited">The run stopped before any page finished.</EmptyState>;
+  const viewports = results.summary.viewportsTested;
   return (
-    <ul className="space-y-8">
-      {results.pages.map((page) => (
-        <PageCard key={page.url} page={page} auditId={results.audit.id} openImage={openImage} showIssues={showIssues} />
-      ))}
-    </ul>
+    <div>
+      {viewports.length > 1 && (
+        <div className="mb-6 flex flex-wrap items-end gap-x-6 gap-y-2">
+          <div className="w-full sm:w-64">
+            <label className="label" htmlFor="pages-viewport">
+              Viewport
+            </label>
+            <select id="pages-viewport" className="input" value={viewport} onChange={(event) => setViewport(event.target.value)}>
+              <option value="">All viewports</option>
+              {viewports.map((name) => (
+                <option key={name}>{name}</option>
+              ))}
+            </select>
+          </div>
+          {viewport && (
+            <p className="pb-2 text-sm text-ink-2">
+              Showing <span className="font-semibold text-ink">{viewport}</span> screenshots only.{' '}
+              <button type="button" className="link" onClick={() => setViewport('')}>
+                Show all viewports
+              </button>
+            </p>
+          )}
+        </div>
+      )}
+      <ul className="space-y-8">
+        {results.pages.map((page) => (
+          <PageCard key={page.url} page={page} viewport={viewport} auditId={results.audit.id} openImage={openImage} showIssues={showIssues} />
+        ))}
+      </ul>
+    </div>
   );
 }
 
-function PageCard({ page, auditId, openImage, showIssues }: { page: PageResult; auditId: string; openImage: OpenImage; showIssues: (page: string) => void }) {
+function PageCard({
+  page,
+  viewport,
+  auditId,
+  openImage,
+  showIssues
+}: {
+  page: PageResult;
+  viewport: string;
+  auditId: string;
+  openImage: OpenImage;
+  showIssues: (page: string) => void;
+}) {
+  const shown = viewport ? page.viewports.filter((item) => item.viewport === viewport) : page.viewports;
   return (
     <li className="panel p-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -469,7 +536,8 @@ function PageCard({ page, auditId, openImage, showIssues }: { page: PageResult; 
         )}
       </div>
       <div className="mt-6 space-y-6">
-        {page.viewports.map((viewport) => (
+        {shown.length === 0 && <p className="border-t border-line pt-5 text-sm text-ink-3">This page was not checked in {viewport}.</p>}
+        {shown.map((viewport) => (
           <section key={viewport.viewport} className="border-t border-line pt-5" aria-label={viewport.viewport}>
             <div className="mb-3 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
               <h4 className="font-semibold">

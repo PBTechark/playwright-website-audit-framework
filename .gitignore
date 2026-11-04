@@ -15,3 +15,5 @@ test-data/page-inventory.json
 
 # Dashboard backend audit history (reports, screenshots, logs per audit)
 backend/data/
+
+DEPLOYMENT.md

@@ -7,7 +7,8 @@ import { AuditIssue, AuditResult } from '../utils/types';
 import { isBlockingSeverity, qualityGateLabel } from '../utils/severityGate';
 
 export class HtmlReportGenerator {
-  async generate(): Promise<void> {
+  /** Writes every report and returns the reportable results it was built from. */
+  async generate(): Promise<AuditResult[]> {
     ensureDir(auditConfig.reportsDir);
     ensureDir(auditConfig.historyDir);
     const results = listJsonFiles(auditConfig.rawResultsDir).map((file) => readJsonFile<AuditResult | null>(file, null));
@@ -199,6 +200,7 @@ export class HtmlReportGenerator {
         { runId, history }
       );
     }
+    return validResults;
   }
 
   private groupByTarget(results: AuditResult[]): Map<string, AuditResult[]> {
@@ -532,7 +534,7 @@ export class HtmlReportGenerator {
           <tbody>
             ${results
               .map(
-                (result, index) => `<tr id="exec-${index}">
+                (result, index) => `<tr id="exec-${index}" data-viewport="${this.escapeAttr(result.viewport)}">
                   <td>${this.escape(result.targetName || result.page.targetName)}</td>
                   <td class="cell-url"><a href="${this.escapeAttr(result.page.url)}" target="_blank" rel="noopener noreferrer">${this.escape(result.page.url)}</a></td>
                   <td>${this.escape(result.viewport)}</td>
@@ -616,6 +618,10 @@ export class HtmlReportGenerator {
           (!query || (card.dataset.search || '').toLowerCase().indexOf(query) !== -1);
         card.hidden = !match;
         if (match) shown += 1;
+      });
+      // Screenshots of other viewports are hidden too, so a viewport filter never shows another viewport's evidence.
+      document.querySelectorAll('[data-viewport]').forEach(function (element) {
+        element.hidden = viewport !== 'all' && element.getAttribute('data-viewport') !== viewport;
       });
       var filtered = shown !== issueCards.length;
       visibleCount.textContent = filtered
@@ -794,7 +800,7 @@ export class HtmlReportGenerator {
     const evidence = Array.from(evidenceByViewport.entries())
       .filter(([, items]) => items.length > 0)
       .map(([viewport, items]) => {
-        return `<div class="evidence-group"><h5>${this.escape(viewport)}</h5><div class="evidence-list">${items
+        return `<div class="evidence-group" data-viewport="${this.escapeAttr(viewport)}"><h5>${this.escape(viewport)}</h5><div class="evidence-list">${items
           .map((item) => {
             const caption = `${title}, ${viewport}`;
             const size = item.width && item.height ? `, ${item.width} × ${item.height} px` : '';
@@ -1170,6 +1176,7 @@ export class HtmlReportGenerator {
     a.chip:hover, .chip-button:hover { border-color:var(--accent-ink); color:var(--accent-ink); text-decoration:none; cursor:pointer; }
 
     .evidence-group + .evidence-group { margin-top:8px; }
+    [hidden] { display:none !important; }
     .evidence-list { display:flex; flex-wrap:wrap; gap:12px; }
     .thumb-wrap { display:flex; flex-direction:column; gap:4px; align-items:flex-start; }
     .thumb { display:flex; flex-direction:column; width:168px; padding:0; overflow:hidden; border:1px solid var(--line); border-radius:var(--radius-sm); background:var(--panel); color:var(--text); text-align:left; cursor:zoom-in; }
