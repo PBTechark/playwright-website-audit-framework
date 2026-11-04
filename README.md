@@ -58,8 +58,8 @@ cd frontend && npm run build && cd ..
 cd backend && npm start          # open http://127.0.0.1:4300
 ```
 
-For frontend development, run `npm run dev` in `backend/` and in `frontend/` (two terminals) and open
-http://localhost:5173. Vite proxies `/api` to the backend.
+For frontend development, run `npm run dashboard:dev` from the project root (starts both apps; Ctrl+C
+stops both) and open http://localhost:5173. Vite proxies `/api` to the backend.
 
 ### Share the dashboard with someone else (ngrok)
 
