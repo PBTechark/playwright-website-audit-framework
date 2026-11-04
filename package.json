@@ -20,7 +20,7 @@
   "dependencies": {
     "@axe-core/playwright": "latest",
     "axe-core": "latest",
-    "csv-parse": "^6.2.1",
+    "csv-parse": "^7.0.3",
     "dotenv": "latest",
     "fast-xml-parser": "latest",
     "sanitize-filename": "latest"
@@ -35,6 +35,9 @@
     "eslint": "latest",
     "prettier": "latest",
     "typescript": "latest"
+  },
+  "overrides": {
+    "minimatch": "^11.0.1"
   },
   "engines": {
     "node": ">=18.18.0"
