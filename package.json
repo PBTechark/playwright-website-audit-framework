@@ -10,6 +10,7 @@
     "audit:smoke": "cross-env NODE_OPTIONS=--max-old-space-size=2560 TARGETS_CSV=test-data/audit-targets-pr.csv playwright test --config=playwright.config.ts",
     "test:unit": "playwright test --config=playwright.unit.config.ts",
     "share": "bash share.sh",
+    "dashboard:dev": "bash -c 'trap \"kill 0\" EXIT; npm --prefix backend run dev & npm --prefix frontend run dev'",
     "build": "tsc -p tsconfig.json",
     "lint": "eslint . --ext .ts",
     "format": "prettier --write .",
