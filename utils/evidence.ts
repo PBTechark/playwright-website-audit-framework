@@ -28,9 +28,33 @@ export class EvidenceManager {
     if ((await locator.count()) === 0) {
       return null;
     }
-    const target = locator.first();
+    let target = locator.first();
     if (!(await target.isVisible().catch(() => false))) {
-      return null;
+      const descendantIndex = await target.locator('*').evaluateAll((elements) => {
+        let bestIndex = -1;
+        let bestArea = 0;
+        elements.forEach((element, index) => {
+          if (!(element instanceof HTMLElement)) return;
+          const rect = element.getBoundingClientRect();
+          if (rect.width <= 1 || rect.height <= 1) return;
+
+          let current: HTMLElement | null = element;
+          while (current) {
+            const style = getComputedStyle(current);
+            if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) <= 0.01) return;
+            current = current.parentElement;
+          }
+
+          const area = rect.width * rect.height;
+          if (area > bestArea) {
+            bestIndex = index;
+            bestArea = area;
+          }
+        });
+        return bestIndex;
+      });
+      if (descendantIndex < 0) return null;
+      target = target.locator('*').nth(descendantIndex);
     }
     const filePath = this.makePath(label);
     await target.screenshot({ path: filePath, timeout: 10_000 }).catch(() => undefined);
@@ -265,12 +289,88 @@ export class EvidenceManager {
     };
   }
 
+  async isOverlapCurrentlyBlocking(affectedSelector: string, occludingSelector: string): Promise<boolean> {
+    return this.page.evaluate(
+      ({ affectedCss, occludingCss }) => {
+        const findUnique = (selector: string): HTMLElement | null => {
+          try {
+            const matches = document.querySelectorAll<HTMLElement>(selector);
+            return matches.length === 1 ? matches[0] : null;
+          } catch {
+            return null;
+          }
+        };
+        const affected = findUnique(affectedCss);
+        const occluding = findUnique(occludingCss);
+        if (!affected || !occluding || affected === occluding) return false;
+
+        const isRendered = (element: HTMLElement): boolean => {
+          let current: HTMLElement | null = element;
+          while (current) {
+            const style = getComputedStyle(current);
+            if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) <= 0.01) {
+              return false;
+            }
+            current = current.parentElement;
+          }
+          const rect = element.getBoundingClientRect();
+          return rect.width > 1 && rect.height > 1;
+        };
+        if (!isRendered(affected) || !isRendered(occluding)) return false;
+
+        const affectedRect = affected.getBoundingClientRect();
+        const occludingRect = occluding.getBoundingClientRect();
+        const left = Math.max(0, affectedRect.left, occludingRect.left);
+        const right = Math.min(document.documentElement.clientWidth, affectedRect.right, occludingRect.right);
+        const top = Math.max(0, affectedRect.top, occludingRect.top);
+        const bottom = Math.min(window.innerHeight, affectedRect.bottom, occludingRect.bottom);
+        const width = Math.max(0, right - left);
+        const height = Math.max(0, bottom - top);
+        const area = width * height;
+        if (area <= 100) return false;
+
+        const isOccludingAbove = (x: number, y: number): boolean => {
+          const stack = document.elementsFromPoint(x, y);
+          const affectedIndex = stack.findIndex((element) => element === affected || affected.contains(element));
+          const occludingIndex = stack.findIndex((element) => element === occluding || occluding.contains(element));
+          return affectedIndex >= 0 && occludingIndex >= 0 && occludingIndex < affectedIndex;
+        };
+        const insetX = Math.min(2, width / 4);
+        const insetY = Math.min(2, height / 4);
+        const samplePoints = [
+          { x: left + width / 2, y: top + height / 2 },
+          { x: left + insetX, y: top + insetY },
+          { x: right - insetX, y: top + insetY },
+          { x: left + insetX, y: bottom - insetY },
+          { x: right - insetX, y: bottom - insetY }
+        ];
+        const blockedSamples = samplePoints.filter((point) => isOccludingAbove(point.x, point.y)).length;
+        const center = { x: affectedRect.left + affectedRect.width / 2, y: affectedRect.top + affectedRect.height / 2 };
+        const centerBlocked = center.x >= left && center.x <= right &&
+          center.y >= top && center.y <= bottom && isOccludingAbove(center.x, center.y);
+        const criticalControl = affected.matches(
+          'select,input[type="date"],input[type="time"],input[type="datetime-local"],input[type="month"],input[type="week"],input[type="number"],input[type="search"],input[type="color"]'
+        );
+        const criticalLeft = affectedRect.right - Math.min(32, affectedRect.width * 0.25);
+        const criticalAreaLeft = Math.max(left, criticalLeft);
+        const criticalPoint = { x: criticalAreaLeft + Math.max(0, right - criticalAreaLeft) / 2, y: top + height / 2 };
+        const criticalEdgeBlocked = criticalControl && right > criticalLeft && left < affectedRect.right &&
+          isOccludingAbove(criticalPoint.x, criticalPoint.y);
+        const coverage = area / Math.max(1, affectedRect.width * affectedRect.height);
+
+        return centerBlocked || criticalEdgeBlocked || (coverage >= 0.5 && area >= 300 && blockedSamples > 0);
+      },
+      { affectedCss: affectedSelector, occludingCss: occludingSelector }
+    );
+  }
+
   async captureOverlapDiagnostic(
     label: string,
     affectedSelector: string,
     occludingSelector: string
   ): Promise<ScreenshotEvidence | null> {
     if (auditConfig.screenshotMode === 'off') return null;
+    if (!(await this.isOverlapCurrentlyBlocking(affectedSelector, occludingSelector))) return null;
 
     const filePath = this.makePath(label);
     const prepared = await this.page.evaluate(
@@ -287,7 +387,6 @@ export class EvidenceManager {
         const occluding = uniqueElement(occludingCss);
         if (!affected || !occluding || affected === occluding) return null;
 
-        affected.scrollIntoView({ block: 'center', inline: 'center' });
         const affectedRect = affected.getBoundingClientRect();
         const occludingRect = occluding.getBoundingClientRect();
         const left = Math.max(0, affectedRect.left, occludingRect.left);
@@ -295,6 +394,22 @@ export class EvidenceManager {
         const right = Math.min(window.innerWidth, affectedRect.right, occludingRect.right);
         const bottom = Math.min(window.innerHeight, affectedRect.bottom, occludingRect.bottom);
         if (right - left <= 1 || bottom - top <= 1) return null;
+        const isOccludingAbove = (x: number, y: number): boolean => {
+          const stack = document.elementsFromPoint(x, y);
+          const indexOf = (element: HTMLElement) =>
+            stack.findIndex((candidate) => candidate === element || element.contains(candidate));
+          const affectedIndex = indexOf(affected);
+          const occludingIndex = indexOf(occluding);
+          return affectedIndex >= 0 && occludingIndex >= 0 && occludingIndex < affectedIndex;
+        };
+        const samplePoints = [
+          { x: (left + right) / 2, y: (top + bottom) / 2 },
+          { x: left + 1, y: top + 1 },
+          { x: right - 1, y: top + 1 },
+          { x: left + 1, y: bottom - 1 },
+          { x: right - 1, y: bottom - 1 }
+        ];
+        if (!samplePoints.some((point) => isOccludingAbove(point.x, point.y))) return null;
 
         const overlay = document.createElement('div');
         overlay.id = 'audit-overlap-diagnostic';

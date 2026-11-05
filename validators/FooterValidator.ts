@@ -6,7 +6,20 @@ export class FooterValidator {
   async validate(page: Page, url: string, viewport: string): Promise<AuditIssue[]> {
     const issues: AuditIssue[] = [];
     const footer = page.locator('footer, [role="contentinfo"]').first();
-    const visible = await footer.isVisible().catch(() => false);
+    const footerCount = await footer.count();
+    const contentIndex = footerCount > 0 ? await this.lastRenderedContentIndex(footer) : -1;
+    let visible = footerCount > 0 && await this.isVisibleInViewport(footer);
+    if (!visible && contentIndex >= 0) {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        await footer.evaluate((footerElement, index) => {
+          footerElement.querySelectorAll('*')[index]?.scrollIntoView({ block: 'end' });
+        }, contentIndex);
+        await page.waitForTimeout(attempt === 0 ? 500 : 100);
+        visible = await this.isVisibleInViewport(footer);
+        if (visible) break;
+      }
+    }
+
     if (!visible) {
       issues.push(
         createIssue({
@@ -71,5 +84,57 @@ export class FooterValidator {
     }
 
     return issues;
+  }
+
+  private async isVisibleInViewport(footer: ReturnType<Page['locator']>): Promise<boolean> {
+    return footer.evaluate((footerElement) => {
+      const isRendered = (element: Element): boolean => {
+        let current: Element | null = element;
+        while (current) {
+          const style = getComputedStyle(current);
+          if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) <= 0.01) {
+            return false;
+          }
+          if (current === footerElement) break;
+          current = current.parentElement;
+        }
+        const rect = element.getBoundingClientRect();
+        return rect.width > 1 && rect.height > 1 &&
+          rect.right > 0 && rect.left < document.documentElement.clientWidth &&
+          rect.bottom > 0 && rect.top < window.innerHeight;
+      };
+
+      if (isRendered(footerElement)) return true;
+      return Array.from(footerElement.querySelectorAll<HTMLElement>('*')).some((element) => {
+        const hasText = Boolean(element.innerText?.trim());
+        const hasVisualContent = element.matches('img,svg,input,button,video,canvas,[role="button"]');
+        return (hasText || hasVisualContent) && isRendered(element);
+      });
+    });
+  }
+
+  private async lastRenderedContentIndex(footer: ReturnType<Page['locator']>): Promise<number> {
+    return footer.locator('*').evaluateAll((elements) => {
+      let candidateIndex = -1;
+      let candidateBottom = Number.NEGATIVE_INFINITY;
+      elements.forEach((element, index) => {
+        if (!(element instanceof HTMLElement)) return;
+        const rect = element.getBoundingClientRect();
+        if (rect.width <= 1 || rect.height <= 1) return;
+
+        let current: HTMLElement | null = element;
+        while (current) {
+          const style = getComputedStyle(current);
+          if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) <= 0.01) return;
+          current = current.parentElement;
+        }
+
+        if (rect.bottom > candidateBottom) {
+          candidateIndex = index;
+          candidateBottom = rect.bottom;
+        }
+      });
+      return candidateIndex;
+    });
   }
 }

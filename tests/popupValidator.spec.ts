@@ -1,4 +1,7 @@
+import fs from 'fs';
+import path from 'path';
 import { expect, test } from '@playwright/test';
+import { auditConfig } from '../config/auditConfig';
 import { PopupValidator } from '../validators/PopupValidator';
 
 test('detects and closes a visible popup using the close button', async ({ page }) => {
@@ -84,7 +87,14 @@ test('reports a popup close control that does not dismiss the popup', async ({ p
     </div>
   `);
 
-  const result = await new PopupValidator().validate(page, 'https://example.com', 'Desktop');
+  const previousScreenshotMode = auditConfig.screenshotMode;
+  auditConfig.screenshotMode = 'on';
+  let result: Awaited<ReturnType<PopupValidator['validate']>>;
+  try {
+    result = await new PopupValidator().validate(page, 'https://example.com/popup-failure', 'Desktop', 'popup-test');
+  } finally {
+    auditConfig.screenshotMode = previousScreenshotMode;
+  }
 
   expect(result.issues).toEqual(expect.arrayContaining([
     expect.objectContaining({
@@ -98,6 +108,50 @@ test('reports a popup close control that does not dismiss the popup', async ({ p
       result: 'FAIL'
     })
   ]));
+  expect(result.issues[0].details).toMatchObject({
+    attempt: {
+      attempted: true,
+      dismissed: false,
+      selector: '#close-promo'
+    }
+  });
+  const evidencePath = result.issues[0].evidence?.[0];
+  expect(evidencePath).toBeDefined();
+  if (!evidencePath) throw new Error('Failed popup issue did not include screenshot evidence.');
+  const evidenceFile = path.resolve(evidencePath);
+  expect(fs.existsSync(evidenceFile)).toBe(true);
+  expect(fs.statSync(evidenceFile).size).toBeGreaterThan(500);
+  fs.rmSync(evidenceFile, { force: true });
+});
+
+test('excludes cookie consent dialogs and does not treat Accept as a popup close action', async ({ page }) => {
+  await page.setContent(`
+    <div id="bc76bf2e-5abb-4ece-8c70-ddbac079e621"
+      class="osano-cm-window__dialog osano-cm-dialog osano-cm-dialog--position_bottom osano-cm-dialog--type_bar"
+      role="dialog" aria-modal="true"
+      style="position:fixed;bottom:0;left:0;width:100%;height:132px;background:white;">
+      <p>This website utilizes technologies such as cookies to enable essential site functionality.</p>
+      <button id="accept-consent">Accept</button>
+      <button id="deny-consent">Deny Non-Essential</button>
+    </div>
+    <script>
+      document.getElementById('accept-consent').addEventListener('click', (event) => {
+        event.currentTarget.dataset.clicked = 'true';
+      });
+    </script>
+  `);
+
+  const result = await new PopupValidator().validate(page, 'https://example.com', 'Desktop');
+
+  expect(result.issues).toHaveLength(0);
+  expect(result.checks).toEqual(expect.arrayContaining([
+    expect.objectContaining({
+      checkName: 'Visible popup detection',
+      result: 'NOT_APPLICABLE'
+    })
+  ]));
+  expect(await page.locator('#accept-consent').getAttribute('data-clicked')).toBeNull();
+  await expect(page.locator('#bc76bf2e-5abb-4ece-8c70-ddbac079e621')).toBeVisible();
 });
 
 test('ignores bootstrap backdrop and closes the actual modal dialog', async ({ page }) => {

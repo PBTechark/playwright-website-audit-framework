@@ -577,6 +577,24 @@ export async function detectDomDefects(page: Page): Promise<DomDefect[]> {
       return width * height;
     };
 
+    const canUserScrollHorizontally = (): boolean => {
+      const rootOverflowX = getComputedStyle(document.documentElement).overflowX;
+      const bodyOverflowX = getComputedStyle(document.body).overflowX;
+      if (['hidden', 'clip'].includes(rootOverflowX) || ['hidden', 'clip'].includes(bodyOverflowX)) return false;
+
+      const before = window.scrollX;
+      const maxScroll = Math.max(
+        0,
+        document.documentElement.scrollWidth - viewportWidth,
+        document.body.scrollWidth - viewportWidth
+      );
+      if (maxScroll <= 20) return false;
+      window.scrollTo(maxScroll, window.scrollY);
+      const reached = window.scrollX;
+      window.scrollTo(before, window.scrollY);
+      return reached > before + 10;
+    };
+
     const intersectsViewport = (rect: DOMRect, minimumArea = 4): boolean =>
       visibleAreaInViewport(rect) >= minimumArea;
 
@@ -685,9 +703,8 @@ export async function detectDomDefects(page: Page): Promise<DomDefect[]> {
           element.matches('main,section,article,header,footer,nav,img,a,button,input,select,textarea,h1,h2,h3,p,li') ||
           Boolean((element.innerText || '').trim()) ||
           Boolean(element.querySelector('img,svg,canvas,video,a,button,input,select,textarea'));
-        const scrollOverflow = element.scrollWidth > element.clientWidth + 2 || element.scrollWidth > viewportWidth + 24;
         const hasOverflowBeyondViewport = rect.right > viewportWidth + 24 || rect.width > viewportWidth + 24;
-        if (visibleHeight > 16 && visibleWidth > 24 && visibleRatio >= 0.2 && userFacing && (scrollOverflow || hasOverflowBeyondViewport)) {
+        if (visibleHeight > 16 && visibleWidth > 24 && visibleRatio >= 0.2 && userFacing && hasOverflowBeyondViewport) {
           return element;
         }
       }
@@ -734,16 +751,18 @@ export async function detectDomDefects(page: Page): Promise<DomDefect[]> {
       })
       .slice(0, 900);
 
-    const overflowElement = hasVisibleHorizontalOverflow(visibleElements);
-    if (overflowElement) {
+    const documentScrollWidth = Math.max(document.documentElement.scrollWidth, document.body.scrollWidth);
+    const pageHasHorizontalScroll = documentScrollWidth > viewportWidth + 20 && canUserScrollHorizontally();
+    const overflowElement = pageHasHorizontalScroll ? hasVisibleHorizontalOverflow(visibleElements) : null;
+    if (pageHasHorizontalScroll) {
       defects.push({
         type: 'Horizontal Scroll',
-        selector: selectorFor(overflowElement),
+        selector: overflowElement ? selectorFor(overflowElement) : 'html',
         description: 'Page creates visible horizontal scrolling from user-facing content outside the viewport.',
         details: {
-          scrollWidth: document.documentElement.scrollWidth,
+          scrollWidth: documentScrollWidth,
           viewportWidth,
-          overflowingElement: selectorFor(overflowElement)
+          overflowingElement: overflowElement ? selectorFor(overflowElement) : 'html'
         }
       });
     }
@@ -1133,6 +1152,8 @@ export async function detectDomDefects(page: Page): Promise<DomDefect[]> {
           centerBlocked: overlap.centerBlocked,
           criticalEdgeBlocked: overlap.criticalEdgeBlocked,
           persistenceSamples: 3,
+          scrollX: Math.round(window.scrollX),
+          scrollY: Math.round(window.scrollY),
           occludedSelector: selectorFor(overlap.occluded),
           occludingSelector: selectorFor(overlap.occluding),
           firstBox: overlap.firstBox,

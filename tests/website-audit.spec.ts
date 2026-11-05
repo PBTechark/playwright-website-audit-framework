@@ -109,9 +109,21 @@ test.describe('Automated website audit', () => {
         }
 
         if (response && response.status() < 400) {
-          const popupResult = await new PopupValidator().validate(page, pageItem.url, viewport);
+          const popupResult = await new PopupValidator().validate(
+            page,
+            pageItem.url,
+            viewport,
+            pageItem.targetName
+          );
           checks.push(...popupResult.checks);
           issues.push(...popupResult.issues);
+          for (const [issueIndex, issue] of popupResult.issues.entries()) {
+            for (const [evidenceIndex, evidencePath] of (issue.evidence ?? []).entries()) {
+              await testInfo.attach(`popup-finding-${issueIndex + 1}-${evidenceIndex + 1}`, {
+                path: path.join(process.cwd(), evidencePath)
+              });
+            }
+          }
           if (popupResult.checks.length > 0) {
             await testInfo.attach('popup-close-assertions', {
               body: JSON.stringify(popupResult, null, 2),

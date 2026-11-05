@@ -1,4 +1,5 @@
 import { Page } from '@playwright/test';
+import { EvidenceManager } from '../utils/evidence';
 import { createIssue } from '../utils/issueFactory';
 import { AuditCheck, AuditIssue } from '../utils/types';
 
@@ -25,7 +26,12 @@ type CloseAttempt = {
 };
 
 export class PopupValidator {
-  async validate(page: Page, url: string, viewport: string): Promise<{ issues: AuditIssue[]; checks: AuditCheck[] }> {
+  async validate(
+    page: Page,
+    url: string,
+    viewport: string,
+    targetName = 'default'
+  ): Promise<{ issues: AuditIssue[]; checks: AuditCheck[] }> {
     const issues: AuditIssue[] = [];
     const checks: AuditCheck[] = [];
     const popup = await this.findVisiblePopup(page);
@@ -38,8 +44,8 @@ export class PopupValidator {
         result: 'NOT_APPLICABLE',
         severity: 'Low',
         expected: 'If a popup appears, it provides a visible close or dismiss action.',
-        actual: 'No visible modal, popup, or blocking overlay was detected.',
-        comment: 'No popup close validation was required on this page.'
+        actual: 'No visible promotional popup or modal was detected.',
+        comment: 'Cookie-consent interfaces are excluded from popup-close validation.'
       }));
       return { issues, checks };
     }
@@ -121,6 +127,9 @@ export class PopupValidator {
     }));
 
     if (!attempt.dismissed) {
+      const evidence = await new EvidenceManager(page, url, viewport, targetName)
+        .captureLocator('popup-close-failure', page.locator(popup.selector).first())
+        .catch(() => null);
       issues.push(createIssue({
         category: 'Interactions',
         url,
@@ -132,6 +141,8 @@ export class PopupValidator {
         actual: attempt.error ? `Close attempt failed: ${attempt.error}` : 'Popup remained visible after clicking the close control.',
         businessImpact: 'Users can become stuck behind a blocking popup and may abandon the page.',
         suggestedFix: 'Fix the close button handler, overlay state, z-index blocking layer, or popup script so the popup disappears after dismissal.',
+        evidence: evidence ? [evidence.path] : [],
+        evidenceDetails: evidence ? [evidence] : [],
         details: { popup, attempt }
       }));
     }
@@ -207,8 +218,18 @@ export class PopupValidator {
           .replace(/\s+/g, ' ')
           .trim();
 
-      const closeText = /^(?:x|×|close|dismiss|no thanks|no,? thanks|not now|maybe later|skip|continue shopping|accept|agree|got it)$/i;
+      const closeText = /^(?:x|×|close|dismiss|no thanks|no,? thanks|not now|maybe later|skip|continue shopping|got it)$/i;
       const closeHint = /close|dismiss|no-thanks|no_thanks|modal-close|popup-close|newsletter-close|klaviyo-close|needsclick|closeButton|btn-close/i;
+      const consentHint = /cookie|consent|osano|onetrust|cookiebot|trustarc|didomi|iubenda|quantcast|usercentrics|cookieyes|complianz|termly|privacy preferences?/i;
+
+      const isConsentManager = (element: HTMLElement): boolean => {
+        let current: HTMLElement | null = element;
+        while (current && current !== document.body) {
+          if (consentHint.test(`${current.id} ${current.className} ${current.innerText || ''}`)) return true;
+          current = current.parentElement;
+        }
+        return false;
+      };
 
       const closeControlsFor = (container: HTMLElement) =>
         Array.from(container.querySelectorAll<HTMLElement>('button,a,[role="button"],input[type="button"],input[type="submit"],[aria-label],[title],[data-dismiss],[data-bs-dismiss]'))
@@ -268,6 +289,7 @@ export class PopupValidator {
       return Array.from(document.querySelectorAll<HTMLElement>(popupSelector))
         .filter(isVisible)
         .filter((element) => !isBackdropOnly(element))
+        .filter((element) => !isConsentManager(element))
         .map((element) => {
           const rect = element.getBoundingClientRect();
           const style = getComputedStyle(element);
@@ -300,14 +322,16 @@ export class PopupValidator {
   }
 
   private async tryClosePopup(page: Page, popup: PopupCandidate): Promise<CloseAttempt> {
+    let lastAttempt: CloseAttempt | null = null;
     for (const control of popup.closeControls) {
       try {
         await page.locator(control.selector).first().click({ timeout: 3_000 });
         await page.waitForTimeout(500);
         const dismissed = await page.locator(popup.selector).first().isHidden({ timeout: 2_000 }).catch(() => false);
         if (dismissed) return { attempted: true, dismissed: true, selector: control.selector };
+        lastAttempt = { attempted: true, dismissed: false, selector: control.selector };
       } catch (error) {
-        return {
+        lastAttempt = {
           attempted: true,
           dismissed: false,
           selector: control.selector,
@@ -315,7 +339,7 @@ export class PopupValidator {
         };
       }
     }
-    return { attempted: false, dismissed: false };
+    return lastAttempt ?? { attempted: false, dismissed: false };
   }
 
   private createCheck(input: Omit<AuditCheck, 'id' | 'component' | 'timestamp'>): AuditCheck {
