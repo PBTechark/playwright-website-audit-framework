@@ -1,8 +1,8 @@
 # Azure DevOps CI/CD. Mirrors .github/workflows/website-audit.yml (which keeps working on GitHub)
 # and adds deployment to the dashboard server.
 #
-#   Push to main         -> Verify -> Deploy (waits for approval; only when deployEnabled is 'true')
 #   Pull request, manual -> Verify -> Smoke audit
+#   Push/merge to main   -> Verify -> Smoke audit -> Deploy (approval; only when deployEnabled is 'true')
 #
 # The smoke audit runs every audit and report on one page (test-data/audit-targets-pr.csv) to prove the
 # engine works end to end. Client sites are audited from the dashboard or `npm run audit`, not in CI:
@@ -50,7 +50,6 @@ stages:
   - stage: Audit
     displayName: Smoke audit
     dependsOn: Verify
-    condition: and(succeeded(), in(variables['Build.Reason'], 'PullRequest', 'Manual'))
     jobs:
       - job: audit
         timeoutInMinutes: 30
@@ -118,7 +117,7 @@ stages:
 
   - ${{ if eq(variables.deployEnabled, 'true') }}:
     - stage: Deploy
-      dependsOn: Verify
+      dependsOn: [Verify, Audit]
       condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'), in(variables['Build.Reason'], 'IndividualCI', 'BatchedCI'))
       jobs:
         - deployment: deploy
