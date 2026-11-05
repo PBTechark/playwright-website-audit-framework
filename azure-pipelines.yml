@@ -1,7 +1,7 @@
 # Azure DevOps CI/CD. Mirrors .github/workflows/website-audit.yml (which keeps working on GitHub)
 # and adds deployment to the dashboard server.
 #
-#   Push to main     -> Verify -> Deploy (waits for approval on the audit-production environment)
+#   Push to main     -> Verify -> Deploy (waits for approval; only when deployEnabled is 'true')
 #   Pull request     -> Verify -> Audit (smoke targets, quality gate off)
 #   Nightly / manual -> Verify -> Audit (all targets, quality gate on)
 #
@@ -34,6 +34,9 @@ pool:
 
 variables:
   npm_config_cache: $(Pipeline.Workspace)/.npm
+  # Azure rejects the whole pipeline while the Deploy stage names a service connection that does not
+  # exist. Set to 'true' once the audit-server-ssh connection and audit-production environment exist.
+  deployEnabled: 'false'
 
 stages:
   - stage: Verify
@@ -135,42 +138,43 @@ stages:
               targetPath: $(Build.ArtifactStagingDirectory)/website-audit-reports
               artifact: website-audit-reports-$(System.JobAttempt)
 
-  - stage: Deploy
-    dependsOn: Verify
-    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'), in(variables['Build.Reason'], 'IndividualCI', 'BatchedCI'))
-    jobs:
-      - deployment: deploy
-        environment: audit-production # add an Approvals check to this environment
-        strategy:
-          runOnce:
-            deploy:
-              steps:
-                # Same commands as DEPLOYMENT.md step 13, run on the server over SSH.
-                - task: SSH@0
-                  displayName: Update and restart the dashboard
-                  inputs:
-                    sshEndpoint: audit-server-ssh # SSH service connection to the EC2 server
-                    runOptions: inline
-                    failOnStdErr: false # npm prints warnings on stderr
-                    inline: |
-                      set -euo pipefail
-                      cd /opt/website-audit/app
+  - ${{ if eq(variables.deployEnabled, 'true') }}:
+    - stage: Deploy
+      dependsOn: Verify
+      condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'), in(variables['Build.Reason'], 'IndividualCI', 'BatchedCI'))
+      jobs:
+        - deployment: deploy
+          environment: audit-production # add an Approvals check to this environment
+          strategy:
+            runOnce:
+              deploy:
+                steps:
+                  # Same commands as DEPLOYMENT.md step 13, run on the server over SSH.
+                  - task: SSH@0
+                    displayName: Update and restart the dashboard
+                    inputs:
+                      sshEndpoint: audit-server-ssh # SSH service connection to the EC2 server
+                      runOptions: inline
+                      failOnStdErr: false # npm prints warnings on stderr
+                      inline: |
+                        set -euo pipefail
+                        cd /opt/website-audit/app
 
-                      # A restart stops the running audit, so wait up to 60 minutes for it to finish.
-                      for _ in $(seq 1 60); do
-                        pid=$(cat reports/.audit-run.lock 2>/dev/null || true)
-                        if [ -z "$pid" ] || ! ps -p "$pid" >/dev/null; then pid=; break; fi
-                        echo "Audit (process $pid) is running; waiting..."
-                        sleep 60
-                      done
-                      if [ -n "$pid" ]; then echo "Audit still running after 60 minutes; not deploying."; exit 1; fi
+                        # A restart stops the running audit, so wait up to 60 minutes for it to finish.
+                        for _ in $(seq 1 60); do
+                          pid=$(cat reports/.audit-run.lock 2>/dev/null || true)
+                          if [ -z "$pid" ] || ! ps -p "$pid" >/dev/null; then pid=; break; fi
+                          echo "Audit (process $pid) is running; waiting..."
+                          sleep 60
+                        done
+                        if [ -n "$pid" ]; then echo "Audit still running after 60 minutes; not deploying."; exit 1; fi
 
-                      sudo -u audit -H git pull --ff-only
-                      sudo -u audit -H npm ci
-                      sudo -u audit -H npx playwright install chromium
-                      sudo -u audit -H bash -c 'cd backend && npm ci'
-                      sudo -u audit -H bash -c 'cd frontend && npm ci && npm run build'
-                      sudo systemctl restart website-audit
+                        sudo -u audit -H git pull --ff-only
+                        sudo -u audit -H npm ci
+                        sudo -u audit -H npx playwright install chromium
+                        sudo -u audit -H bash -c 'cd backend && npm ci'
+                        sudo -u audit -H bash -c 'cd frontend && npm ci && npm run build'
+                        sudo systemctl restart website-audit
 
-                      sleep 5
-                      curl -fsS -o /dev/null http://127.0.0.1:4300/ && echo "Dashboard is up."
+                        sleep 5
+                        curl -fsS -o /dev/null http://127.0.0.1:4300/ && echo "Dashboard is up."
