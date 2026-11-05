@@ -1,33 +1,18 @@
 # Azure DevOps CI/CD. Mirrors .github/workflows/website-audit.yml (which keeps working on GitHub)
 # and adds deployment to the dashboard server.
 #
-#   Push to main     -> Verify -> Deploy (waits for approval; only when deployEnabled is 'true')
-#   Pull request     -> Verify -> Audit (smoke targets, quality gate off)
-#   Nightly / manual -> Verify -> Audit (all targets, quality gate on)
+#   Push to main         -> Verify -> Deploy (waits for approval; only when deployEnabled is 'true')
+#   Pull request, manual -> Verify -> Smoke audit
+#
+# The smoke audit runs every audit and report on one page (test-data/audit-targets-pr.csv) to prove the
+# engine works end to end. Client sites are audited from the dashboard or `npm run audit`, not in CI:
+# their defects would turn builds red even when the code is fine.
 #
 # Azure Repos ignores `pr:` in YAML: pull request runs come from a Build validation branch policy on main.
 
 trigger:
   branches:
     include: [main]
-
-schedules:
-  - cron: '0 2 * * *' # 02:00 UTC, same as GitHub
-    displayName: Nightly audit
-    branches:
-      include: [main]
-    always: true
-
-parameters:
-  - name: maxPages
-    displayName: Max pages per target
-    type: number
-    default: 75
-  - name: failOnSeverity
-    displayName: Fail on findings at or above
-    type: string
-    default: Medium
-    values: [Medium, High, Critical, 'Off']
 
 pool:
   vmImage: ubuntu-latest
@@ -63,12 +48,12 @@ stages:
             displayName: Unit tests
 
   - stage: Audit
+    displayName: Smoke audit
     dependsOn: Verify
-    # Pushes to main only deploy; a full audit takes too long to run on every push.
-    condition: and(succeeded(), in(variables['Build.Reason'], 'PullRequest', 'Schedule', 'Manual'))
+    condition: and(succeeded(), in(variables['Build.Reason'], 'PullRequest', 'Manual'))
     jobs:
       - job: audit
-        timeoutInMinutes: 240
+        timeoutInMinutes: 30
         steps:
           - task: UseNode@1
             inputs:
@@ -83,21 +68,14 @@ stages:
           - script: npx playwright install --with-deps chromium
             displayName: Install Playwright browser
 
-          # Fails the job when the quality gate fails; the steps below still publish the reports.
-          - script: |
-              set -euo pipefail
-              if [ "$BUILD_REASON" = "PullRequest" ]; then
-                export TARGETS_CSV=test-data/audit-targets-pr.csv AUDIT_FAIL_ON_SEVERITY=Off
-              fi
-              npm run audit
-            displayName: Run website audit
+          # Fails only if the engine breaks; findings on the demo page are expected and do not gate.
+          - script: npm run audit
+            displayName: Run smoke audit
             env:
               CI: 'true'
-              MAX_PAGES: ${{ parameters.maxPages }}
-              TARGETS_CSV: test-data/audit-targets.csv
+              TARGETS_CSV: test-data/audit-targets-pr.csv
               AUDIT_WORKERS: '2'
-              AUDIT_FAIL_ON_SEVERITY: ${{ parameters.failOnSeverity }}
-              GLOBAL_TIMEOUT_MS: '10800000'
+              AUDIT_FAIL_ON_SEVERITY: 'Off'
 
           - script: |
               node <<'NODE'
