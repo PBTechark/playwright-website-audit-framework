@@ -1,0 +1,176 @@
+# Azure DevOps CI/CD. Mirrors .github/workflows/website-audit.yml (which keeps working on GitHub)
+# and adds deployment to the dashboard server.
+#
+#   Push to main     -> Verify -> Deploy (waits for approval on the audit-production environment)
+#   Pull request     -> Verify -> Audit (smoke targets, quality gate off)
+#   Nightly / manual -> Verify -> Audit (all targets, quality gate on)
+#
+# Azure Repos ignores `pr:` in YAML: pull request runs come from a Build validation branch policy on main.
+
+trigger:
+  branches:
+    include: [main]
+
+schedules:
+  - cron: '0 2 * * *' # 02:00 UTC, same as GitHub
+    displayName: Nightly audit
+    branches:
+      include: [main]
+    always: true
+
+parameters:
+  - name: maxPages
+    displayName: Max pages per target
+    type: number
+    default: 75
+  - name: failOnSeverity
+    displayName: Fail on findings at or above
+    type: string
+    default: Medium
+    values: [Medium, High, Critical, 'Off']
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  npm_config_cache: $(Pipeline.Workspace)/.npm
+
+stages:
+  - stage: Verify
+    jobs:
+      - job: verify
+        steps:
+          - task: UseNode@1
+            inputs:
+              version: '24.x'
+          - task: Cache@2
+            displayName: Cache npm
+            inputs:
+              key: 'npm | "$(Agent.OS)" | package-lock.json'
+              path: $(npm_config_cache)
+          - script: npm ci
+            displayName: Install dependencies
+          - script: npx playwright install --with-deps chromium
+            displayName: Install Playwright browser
+          - script: npm run build
+            displayName: Build
+          - script: npm run lint
+            displayName: Lint
+          - script: npm run test:unit
+            displayName: Unit tests
+
+  - stage: Audit
+    dependsOn: Verify
+    # Pushes to main only deploy; a full audit takes too long to run on every push.
+    condition: and(succeeded(), in(variables['Build.Reason'], 'PullRequest', 'Schedule', 'Manual'))
+    jobs:
+      - job: audit
+        timeoutInMinutes: 240
+        steps:
+          - task: UseNode@1
+            inputs:
+              version: '24.x'
+          - task: Cache@2
+            displayName: Cache npm
+            inputs:
+              key: 'npm | "$(Agent.OS)" | package-lock.json'
+              path: $(npm_config_cache)
+          - script: npm ci
+            displayName: Install dependencies
+          - script: npx playwright install --with-deps chromium
+            displayName: Install Playwright browser
+
+          # Fails the job when the quality gate fails; the steps below still publish the reports.
+          - script: |
+              set -euo pipefail
+              if [ "$BUILD_REASON" = "PullRequest" ]; then
+                export TARGETS_CSV=test-data/audit-targets-pr.csv AUDIT_FAIL_ON_SEVERITY=Off
+              fi
+              npm run audit
+            displayName: Run website audit
+            env:
+              CI: 'true'
+              MAX_PAGES: ${{ parameters.maxPages }}
+              TARGETS_CSV: test-data/audit-targets.csv
+              AUDIT_WORKERS: '2'
+              AUDIT_FAIL_ON_SEVERITY: ${{ parameters.failOnSeverity }}
+              GLOBAL_TIMEOUT_MS: '10800000'
+
+          - script: |
+              node <<'NODE'
+              const fs = require('node:fs');
+              const reportPath = 'reports/website-audit-report.json';
+              let summary = '## Website audit\n\n';
+              if (!fs.existsSync(reportPath)) {
+                summary += 'The custom report was not generated. Check the earlier steps for the failure.\n';
+              } else {
+                const counts = JSON.parse(fs.readFileSync(reportPath, 'utf8')).summary || {};
+                summary += `- Targets: ${counts.targets ?? 0}\n`;
+                summary += `- Pages crawled: ${counts.pagesCrawled ?? 0}\n`;
+                summary += `- Total findings: ${counts.totalIssues ?? 0}\n`;
+                summary += `- Critical / High / Medium / Low: ${counts.criticalIssues ?? 0} / ${counts.highIssues ?? 0} / ${counts.mediumIssues ?? 0} / ${counts.lowIssues ?? 0}\n`;
+                summary += '\nDownload the `website-audit-reports` artifact for the HTML reports and screenshots.\n';
+              }
+              const file = `${process.env.AGENT_TEMPDIRECTORY}/audit-summary.md`;
+              fs.writeFileSync(file, summary);
+              console.log(`##vso[task.uploadsummary]${file}`);
+              NODE
+            displayName: Add audit summary
+            condition: succeededOrFailed()
+
+          - script: |
+              set -eu
+              out="$(Build.ArtifactStagingDirectory)/website-audit-reports"
+              mkdir -p "$out"
+              for dir in reports screenshots logs traces; do
+                [ -d "$dir" ] && cp -a "$dir" "$out/"
+              done
+              rm -rf "$out/reports/allure-results"
+            displayName: Collect reports and evidence
+            condition: succeededOrFailed()
+          - task: PublishPipelineArtifact@1
+            displayName: Publish reports and evidence
+            condition: succeededOrFailed()
+            inputs:
+              targetPath: $(Build.ArtifactStagingDirectory)/website-audit-reports
+              artifact: website-audit-reports-$(System.JobAttempt)
+
+  - stage: Deploy
+    dependsOn: Verify
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'), in(variables['Build.Reason'], 'IndividualCI', 'BatchedCI'))
+    jobs:
+      - deployment: deploy
+        environment: audit-production # add an Approvals check to this environment
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                # Same commands as DEPLOYMENT.md step 13, run on the server over SSH.
+                - task: SSH@0
+                  displayName: Update and restart the dashboard
+                  inputs:
+                    sshEndpoint: audit-server-ssh # SSH service connection to the EC2 server
+                    runOptions: inline
+                    failOnStdErr: false # npm prints warnings on stderr
+                    inline: |
+                      set -euo pipefail
+                      cd /opt/website-audit/app
+
+                      # A restart stops the running audit, so wait up to 60 minutes for it to finish.
+                      for _ in $(seq 1 60); do
+                        pid=$(cat reports/.audit-run.lock 2>/dev/null || true)
+                        if [ -z "$pid" ] || ! ps -p "$pid" >/dev/null; then pid=; break; fi
+                        echo "Audit (process $pid) is running; waiting..."
+                        sleep 60
+                      done
+                      if [ -n "$pid" ]; then echo "Audit still running after 60 minutes; not deploying."; exit 1; fi
+
+                      sudo -u audit -H git pull --ff-only
+                      sudo -u audit -H npm ci
+                      sudo -u audit -H npx playwright install chromium
+                      sudo -u audit -H bash -c 'cd backend && npm ci'
+                      sudo -u audit -H bash -c 'cd frontend && npm ci && npm run build'
+                      sudo systemctl restart website-audit
+
+                      sleep 5
+                      curl -fsS -o /dev/null http://127.0.0.1:4300/ && echo "Dashboard is up."
