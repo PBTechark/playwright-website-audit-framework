@@ -1,7 +1,12 @@
 import { Page } from '@playwright/test';
 import { EvidenceManager } from '../utils/evidence';
 import { createIssue } from '../utils/issueFactory';
-import { detectDomDefects, detectReloadShiftDefects, detectShiftDefects } from '../utils/domDetectors';
+import {
+  detectDomDefects,
+  detectFormRowAlignmentDefects,
+  detectReloadShiftDefects,
+  detectShiftDefects
+} from '../utils/domDetectors';
 import { AuditIssue, ScreenshotEvidence, Severity } from '../utils/types';
 
 export class VisualAudit {
@@ -17,6 +22,7 @@ export class VisualAudit {
     await page.evaluate(() => window.scrollTo(0, 0));
     await page.waitForTimeout(300);
     const topVisualDefects = await detectDomDefects(page);
+    const topFormRowAlignmentDefects = await detectFormRowAlignmentDefects(page);
     const shiftDefects = await detectShiftDefects(page);
     const reloadShiftDefects = await detectReloadShiftDefects(page);
 
@@ -25,6 +31,7 @@ export class VisualAudit {
     await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
     await page.waitForTimeout(300);
     const bottomVisualDefects = await detectDomDefects(page);
+    const bottomFormRowAlignmentDefects = await detectFormRowAlignmentDefects(page);
     if (shiftDefects.length > 0 || reloadShiftDefects.length > 0) {
       screenshots.push(await evidence.captureFullPage('layout-shift-after'));
     }
@@ -36,7 +43,14 @@ export class VisualAudit {
     if (headerShot) screenshots.push(headerShot);
     if (footerShot) screenshots.push(footerShot);
     const defectsByKey = new Map(
-      [...topVisualDefects, ...bottomVisualDefects, ...shiftDefects, ...reloadShiftDefects].map((defect) => [
+      [
+        ...topVisualDefects,
+        ...bottomVisualDefects,
+        ...topFormRowAlignmentDefects,
+        ...bottomFormRowAlignmentDefects,
+        ...shiftDefects,
+        ...reloadShiftDefects
+      ].map((defect) => [
         `${defect.type}|${defect.selector}|${defect.description}`,
         defect
       ])
@@ -51,6 +65,12 @@ export class VisualAudit {
         .split(' / ')
         .map((selector) => selector.trim())
         .filter((selector) => selector && selector !== 'layout-row');
+      const controlSelectors = defect.details.controlSelectors;
+      if (Array.isArray(controlSelectors)) {
+        evidenceSelectors.push(
+          ...controlSelectors.filter((selector): selector is string => typeof selector === 'string')
+        );
+      }
       const occludingSelector = defect.details.occludingSelector;
       if (typeof occludingSelector === 'string' && occludingSelector.trim()) {
         evidenceSelectors.push(occludingSelector.trim());
@@ -139,6 +159,7 @@ export class VisualAudit {
     if (type === 'Repeated Row Height Mismatch') return 'Apply consistent card sizing or stretch row items, and reserve equal space for repeated content regions.';
     if (type === 'Spacing Inconsistency') return 'Replace one-off margins with a shared gap or spacing token on the repeated-item container.';
     if (type === 'Form Label/Input Alignment') return 'Align each label/input pair with a consistent form grid, label width, gap, and cross-axis alignment.';
+    if (type === 'Form Row Alignment') return 'Align controls in the same form row with a shared flex/grid cross-axis alignment and consistent control heights.';
     if (type === 'Icon/Text Alignment') return 'Align the icon and adjacent text on a shared row baseline or center line using flex/grid alignment.';
     return 'Review layout rules, spacing tokens, and responsive behavior for this element.';
   }
@@ -149,6 +170,7 @@ export class VisualAudit {
     if (type === 'Repeated Row Height Mismatch') return 'Repeated items in a visual row use consistent heights within the measured tolerance.';
     if (type === 'Spacing Inconsistency') return 'Repeated layout gaps use a consistent spacing value within the measured tolerance.';
     if (type === 'Form Label/Input Alignment') return 'Horizontal label/input pairs share a visual center; stacked pairs share a left edge.';
+    if (type === 'Form Row Alignment') return 'Visible controls intended to share a horizontal form row have vertical centers within the measured tolerance.';
     if (type === 'Icon/Text Alignment') return 'Icons and their adjacent text align cleanly in the same visible row.';
     if (type.includes('Overlap') || type.includes('Obstruction')) return 'Visible controls and content do not obscure or collide with one another.';
     if (type.includes('Off-screen') || type.includes('Horizontal')) return 'All visible content remains within the layout viewport without unintended horizontal scrolling.';
@@ -159,7 +181,8 @@ export class VisualAudit {
   }
 
   private businessImpactFor(type: string): string {
-    if (type.includes('Shift')) return 'Unexpected movement harms readability, interaction accuracy, and user confidence.';
+    if (type.includes('Shift')) return 'Unexpected movement harms readability, interaction accuracy, and user confidence.'
+    if (type === 'Form Row Alignment') return 'Uneven form controls look broken and make search/filter controls harder to scan and use.';
     if (type.includes('Form')) return 'Misaligned form controls reduce scanability and can make data entry harder.';
     if (type === 'Icon/Text Alignment') return 'Misaligned icon/text rows look broken and reduce scanability of contact or feature information.';
     if (type.includes('Grid') || type.includes('Row') || type.includes('Spacing')) return 'Inconsistent repeated layouts look broken and make related content harder to compare.';
@@ -168,7 +191,7 @@ export class VisualAudit {
   }
 
   private severityFor(type: string): Severity | undefined {
-    if (['Grid/Card Alignment', 'Repeated Row Height Mismatch', 'Spacing Inconsistency', 'Form Label/Input Alignment', 'Icon/Text Alignment'].includes(type)) {
+    if (['Grid/Card Alignment', 'Repeated Row Height Mismatch', 'Spacing Inconsistency', 'Form Label/Input Alignment', 'Form Row Alignment', 'Icon/Text Alignment'].includes(type)) {
       return 'Medium';
     }
     return undefined;

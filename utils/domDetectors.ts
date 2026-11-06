@@ -1488,6 +1488,164 @@ export async function detectDomDefects(page: Page): Promise<DomDefect[]> {
   });
 }
 
+/**
+ * Independently checks same-row form controls against a shared vertical centerline.
+ * Kept separate from detectDomDefects so it cannot change that detector's result cap.
+ */
+export async function detectFormRowAlignmentDefects(page: Page): Promise<DomDefect[]> {
+  return page.evaluate(() => {
+    type Control = {
+      element: HTMLElement;
+      selector: string;
+      tag: string;
+      type: string;
+      left: number;
+      right: number;
+      top: number;
+      bottom: number;
+      centerY: number;
+      height: number;
+    };
+
+    const selectorFor = (element: Element): string => {
+      if (element.id) {
+        const candidate = `#${CSS.escape(element.id)}`;
+        if (document.querySelectorAll(candidate).length === 1) return candidate;
+      }
+      const parts: string[] = [];
+      let node: Element | null = element;
+      while (node && node !== document.body) {
+        const siblings = node.parentElement
+          ? Array.from(node.parentElement.children).filter((item) => item.tagName === node!.tagName)
+          : [];
+        parts.unshift(
+          `${node.tagName.toLowerCase()}:nth-of-type(${Math.max(1, siblings.indexOf(node) + 1)})`
+        );
+        node = node.parentElement;
+        const candidate = `body > ${parts.join(' > ')}`;
+        if (node === document.body && document.querySelectorAll(candidate).length === 1) return candidate;
+      }
+      return `body > ${parts.join(' > ')}`;
+    };
+    const isVisible = (element: HTMLElement): boolean => {
+      const rect = element.getBoundingClientRect();
+      if (rect.width < 40 || rect.height < 16) return false;
+      let current: HTMLElement | null = element;
+      while (current) {
+        const style = getComputedStyle(current);
+        if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) <= 0.01)
+          return false;
+        current = current.parentElement;
+      }
+      return true;
+    };
+    const median = (values: number[]): number => {
+      const ordered = [...values].sort((left, right) => left - right);
+      const middle = Math.floor(ordered.length / 2);
+      return ordered.length % 2 ? ordered[middle] : (ordered[middle - 1] + ordered[middle]) / 2;
+    };
+    const findings: DomDefect[] = [];
+    const forms = Array.from(document.querySelectorAll<HTMLFormElement>('form, [role="form"]')).slice(0, 50);
+
+    for (const form of forms) {
+      const controls = Array.from(
+        form.querySelectorAll<HTMLElement>(
+          'select,textarea,input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not([type="button"]):not([type="reset"]),button[type="submit"],button:not([type]),input[type="submit"]'
+        )
+      )
+        .filter((element) => {
+          if (!isVisible(element)) return false;
+          if (element instanceof HTMLInputElement && element.disabled) return false;
+          if (element instanceof HTMLButtonElement && element.disabled) return false;
+          return true;
+        })
+        .map((element): Control => {
+          const rect = element.getBoundingClientRect();
+          return {
+            element,
+            selector: selectorFor(element),
+            tag: element.tagName.toLowerCase(),
+            type:
+              element instanceof HTMLInputElement
+                ? element.type || 'text'
+                : element instanceof HTMLButtonElement
+                  ? 'submit'
+                  : element.tagName.toLowerCase(),
+            left: rect.left,
+            right: rect.right,
+            top: rect.top,
+            bottom: rect.bottom,
+            centerY: (rect.top + rect.bottom) / 2,
+            height: rect.height
+          };
+        })
+        .sort((left, right) => left.centerY - right.centerY || left.left - right.left);
+
+      const rows: Control[][] = [];
+      for (const control of controls) {
+        const row = rows.find((candidate) => {
+          const centers = candidate.map((item) => item.centerY);
+          const medianCenter = median(centers);
+          const allowedSpread = Math.max(20, median(candidate.map((item) => item.height)) * 0.7);
+          return Math.abs(control.centerY - medianCenter) <= allowedSpread;
+        });
+        if (row) row.push(control);
+        else rows.push([control]);
+      }
+
+      for (const row of rows) {
+        if (row.length < 3) continue;
+        const ordered = [...row].sort((left, right) => left.left - right.left);
+        const horizontalNeighbors = ordered
+          .slice(1)
+          .every((control, index) => control.left >= ordered[index].right - 20);
+        if (!horizontalNeighbors) continue;
+
+        const centers = row.map((control) => control.centerY);
+        const centerSpread = Math.max(...centers) - Math.min(...centers);
+        const medianHeight = median(row.map((control) => control.height));
+        const threshold = Math.max(8, Math.min(12, medianHeight * 0.25));
+        if (centerSpread <= threshold) continue;
+
+        const baseline = median(centers);
+        const formSelector = selectorFor(form);
+        findings.push({
+          type: 'Form Row Alignment',
+          selector: formSelector,
+          description:
+            'Visible controls in the same horizontal form row do not share a consistent vertical center.',
+          severity: 'Medium',
+          details: {
+            formSelector,
+            controlSelectors: ordered.map((control) => control.selector),
+            controls: ordered.map((control) => ({
+              selector: control.selector,
+              tag: control.tag,
+              type: control.type,
+              box: {
+                left: Number(control.left.toFixed(1)),
+                top: Number(control.top.toFixed(1)),
+                right: Number(control.right.toFixed(1)),
+                bottom: Number(control.bottom.toFixed(1)),
+                width: Number((control.right - control.left).toFixed(1)),
+                height: Number(control.height.toFixed(1)),
+                centerY: Number(control.centerY.toFixed(1))
+              },
+              centerDelta: Number(Math.abs(control.centerY - baseline).toFixed(1))
+            })),
+            medianCenterY: Number(baseline.toFixed(1)),
+            centerSpread: Number(centerSpread.toFixed(1)),
+            allowedCenterSpread: Number(threshold.toFixed(1)),
+            viewport: { width: document.documentElement.clientWidth, height: window.innerHeight }
+          }
+        });
+      }
+    }
+
+    return findings;
+  });
+}
+
 export async function detectShiftDefects(page: Page): Promise<DomDefect[]> {
   const config = auditConfig.layoutShift;
   const firstSnapshot = await collectLayoutShiftSnapshot(page, config);

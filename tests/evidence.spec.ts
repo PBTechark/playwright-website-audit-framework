@@ -3,6 +3,7 @@ import path from 'path';
 import { expect, test } from '@playwright/test';
 import { EvidenceManager } from '../utils/evidence';
 import { VisualAudit } from '../audits/VisualAudit';
+import { auditConfig } from '../config/auditConfig';
 
 test.describe('Evidence manager', () => {
   test('does not confirm an accordion heading and navigation link that do not overlap', async ({ page }) => {
@@ -73,6 +74,53 @@ test.describe('Evidence manager', () => {
     const screenshotPath = path.join(process.cwd(), evidencePath);
     expect(fs.existsSync(screenshotPath)).toBe(true);
     expect(fs.statSync(screenshotPath).size).toBeGreaterThan(1000);
+  });
+
+  test('includes same-row form control misalignment in visual report findings', async ({ page }) => {
+    const previousScreenshotMode = auditConfig.screenshotMode;
+    auditConfig.screenshotMode = 'off';
+    try {
+      await page.route('https://example.com/form-row', (route) =>
+        route.fulfill({
+          contentType: 'text/html',
+          body: `
+            <style>
+              form { display:flex; align-items:flex-start; gap:20px; }
+              .group { display:flex; align-items:center; gap:8px; }
+              select, input { width:130px; height:28px; }
+              button { width:90px; height:28px; }
+              .search { margin-top:12px; }
+            </style>
+            <form id="filters">
+              <div class="group"><label for="type">Property Type</label><select id="type"><option>All</option></select></div>
+              <div class="group"><label for="status">Waitlist</label><select id="status"><option>All</option></select></div>
+              <div class="group search"><input id="query" type="search" aria-label="Search"><button id="submit" type="submit">Search</button></div>
+            </form>
+          `
+        })
+      );
+      await page.goto('https://example.com/form-row');
+
+      const result = await new VisualAudit().run(page, page.url(), 'Desktop Full HD', 'test-target');
+      const issue = result.issues.find((candidate) =>
+        candidate.description.startsWith('Form Row Alignment:')
+      );
+
+      expect(issue).toMatchObject({
+        category: 'Visual',
+        severity: 'Medium',
+        selector: '#filters',
+        expected: expect.stringContaining('horizontal form row'),
+        suggestedFix: expect.stringContaining('Align controls'),
+        details: expect.objectContaining({
+          controlSelectors: ['#type', '#status', '#query', '#submit'],
+          centerSpread: 12,
+          allowedCenterSpread: 8
+        })
+      });
+    } finally {
+      auditConfig.screenshotMode = previousScreenshotMode;
+    }
   });
 
   test('highlights the affected control and the occluding image for overlap findings', async ({ page }) => {

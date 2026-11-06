@@ -1,6 +1,11 @@
 import { expect, test } from '@playwright/test';
 import { auditConfig } from '../config/auditConfig';
-import { detectDomDefects, detectReloadShiftDefects, detectShiftDefects } from '../utils/domDetectors';
+import {
+  detectDomDefects,
+  detectFormRowAlignmentDefects,
+  detectReloadShiftDefects,
+  detectShiftDefects
+} from '../utils/domDetectors';
 
 test.describe.configure({ mode: 'serial' });
 
@@ -508,4 +513,76 @@ test('detects a misaligned horizontal form label and input pair', async ({ page 
       details: expect.objectContaining({ orientation: 'horizontal' })
     })
   ]));
+});
+
+test('detects shared-row alignment drift between filter controls and search actions', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.setContent(`
+    <style>
+      form { display:flex; align-items:flex-start; gap:20px; }
+      .group { display:flex; align-items:center; gap:8px; }
+      select, input { width:130px; height:28px; }
+      button { width:90px; height:28px; }
+      .search { margin-top:12px; }
+    </style>
+    <form id="filters">
+      <div class="group"><label for="type">Property Type</label><select id="type"><option>All</option></select></div>
+      <div class="group"><label for="status">Waitlist</label><select id="status"><option>All</option></select></div>
+      <div class="group search"><input id="query" type="search" aria-label="Search"><button id="submit" type="submit">Search</button></div>
+    </form>
+  `);
+
+  const defects = await detectFormRowAlignmentDefects(page);
+  const defect = defects.find((item) => item.type === 'Form Row Alignment');
+
+  expect(defect).toBeDefined();
+  expect(defect).toMatchObject({
+    selector: '#filters',
+    severity: 'Medium',
+    details: {
+      controlSelectors: ['#type', '#status', '#query', '#submit'],
+      centerSpread: 12,
+      allowedCenterSpread: 8
+    }
+  });
+});
+
+test('does not report controls centered on the same form-row baseline', async ({ page }) => {
+  await page.setContent(`
+    <style>
+      form { display:flex; align-items:center; gap:16px; }
+      select, input { width:120px; height:28px; }
+      button { width:80px; height:28px; }
+    </style>
+    <form id="filters">
+      <select aria-label="Type"><option>All</option></select>
+      <select aria-label="Status"><option>All</option></select>
+      <input type="search" aria-label="Search">
+      <button type="submit">Search</button>
+    </form>
+  `);
+
+  const defects = await detectFormRowAlignmentDefects(page);
+
+  expect(defects).toHaveLength(0);
+});
+
+test('does not compare controls from separate stacked form rows', async ({ page }) => {
+  await page.setContent(`
+    <style>
+      form { display:flex; flex-direction:column; align-items:flex-start; gap:12px; }
+      select, input { width:120px; height:28px; }
+      button { width:80px; height:28px; }
+    </style>
+    <form id="filters">
+      <select aria-label="Type"><option>All</option></select>
+      <select aria-label="Status"><option>All</option></select>
+      <input type="search" aria-label="Search">
+      <button type="submit">Search</button>
+    </form>
+  `);
+
+  const defects = await detectFormRowAlignmentDefects(page);
+
+  expect(defects).toHaveLength(0);
 });
