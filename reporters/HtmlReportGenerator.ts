@@ -285,7 +285,7 @@ export class HtmlReportGenerator {
         return current === 'Pass' || (issue.severity !== 'Low' && rank[issue.severity] < rank[current as AuditIssue['severity']]) ? issue.severity : current;
       }, 'Pass');
       return `<button type="button" class="page-card" data-filter-page="${this.escapeAttr(url)}" data-search="${this.escapeAttr(`${url} ${page.target}`)}" title="Show the issues on this page">
-        <span class="page-card-head"><span class="severity-badge ${highest}">${highest === 'Pass' ? '' : `<i class="sev-mark ${highest.toLowerCase()}" aria-hidden="true"></i>`}${highest === 'Pass' ? 'No issues' : `Highest: ${this.escape(highest)}`}</span><span class="page-count">${this.plural(page.issues.length, 'finding')}</span></span>
+        <span class="page-card-head"><span class="severity-badge ${highest}">${highest === 'Pass' ? '' : `<i class="sev-mark ${highest.toLowerCase()}" aria-hidden="true"></i>`}${highest === 'Pass' ? 'No issues' : `Highest: ${this.escape(highest)}`}</span><span class="page-count">${this.plural(this.groupIssues(page.issues).length, 'issue')}</span></span>
         <span class="page-title">${this.escape(page.target)}</span>
         <span class="page-url">${this.escape(url)}</span>
         <span class="page-meta">${this.plural(page.viewports.size, 'viewport')} audited.<span class="screen-only"> Show this page's issues</span></span>
@@ -306,15 +306,18 @@ export class HtmlReportGenerator {
     }, 100);
     const healthScore = Math.max(0, Math.min(100, weighted));
     const status = healthScore >= 90 ? 'Excellent' : healthScore >= 75 ? 'Healthy' : healthScore >= 50 ? 'Warning' : 'Needs Attention';
+    // Counted like the issue cards: one per problem per page, however many elements or viewports.
+    const groups = this.groupIssues(issues);
+    const count = (severity: AuditIssue['severity']) => groups.filter((group) => group[0].severity === severity).length;
     return {
       targets,
       pagesCrawled: pages,
       viewportExecutions: results.length,
-      totalIssues: issues.length,
-      criticalIssues: issues.filter((issue) => issue.severity === 'Critical').length,
-      highIssues: issues.filter((issue) => issue.severity === 'High').length,
-      mediumIssues: issues.filter((issue) => issue.severity === 'Medium').length,
-      lowIssues: issues.filter((issue) => issue.severity === 'Low').length,
+      totalIssues: groups.length,
+      criticalIssues: count('Critical'),
+      highIssues: count('High'),
+      mediumIssues: count('Medium'),
+      lowIssues: count('Low'),
       healthScore,
       status
     };
@@ -527,10 +530,10 @@ export class HtmlReportGenerator {
     </section>
 
     <section id="executions" class="section">
-      <div class="section-heading"><h2>Page executions</h2><p>Each row is one page checked in one viewport.<span class="screen-only"> Select a findings count to see those issues.</span></p></div>
+      <div class="section-heading"><h2>Page executions</h2><p>Each row is one page checked in one viewport.<span class="screen-only"> Select an issue count to see those issues.</span></p></div>
       <div class="table-wrap panel">
         <table class="exec-table">
-          <thead><tr><th scope="col">Target</th><th scope="col">Page</th><th scope="col">Viewport</th><th scope="col">Screen resolution</th><th scope="col">Findings</th><th scope="col">Load</th><th scope="col">Screenshots</th></tr></thead>
+          <thead><tr><th scope="col">Target</th><th scope="col">Page</th><th scope="col">Viewport</th><th scope="col">Screen resolution</th><th scope="col">Issues</th><th scope="col">Load</th><th scope="col">Screenshots</th></tr></thead>
           <tbody>
             ${results
               .map(
@@ -539,7 +542,7 @@ export class HtmlReportGenerator {
                   <td class="cell-url"><a href="${this.escapeAttr(result.page.url)}" target="_blank" rel="noopener noreferrer">${this.escape(result.page.url)}</a></td>
                   <td>${this.escape(result.viewport)}</td>
                   <td>${this.resolutionHtml(result.resolution)}</td>
-                  <td><button type="button" class="link-button" data-filter-page="${this.escapeAttr(result.page.url)}" data-filter-viewport="${this.escapeAttr(result.viewport)}">${this.plural(result.issues.length, 'finding')}</button></td>
+                  <td><button type="button" class="link-button" data-filter-page="${this.escapeAttr(result.page.url)}" data-filter-viewport="${this.escapeAttr(result.viewport)}">${this.plural(this.groupIssues(result.issues).length, 'issue')}</button></td>
                   <td class="nowrap">${result.performance?.loadTimeMs !== undefined ? `${Math.round(result.performance.loadTimeMs)} ms` : 'Not measured'}</td>
                   <td><div class="shot-links">${result.screenshots
                     .map((shot) => `<button type="button" class="chip-button" data-evidence-src="${this.escapeAttr(this.assetHref(outputDir, shot.path))}" data-evidence-type="image" data-evidence-title="${this.escapeAttr(`${result.viewport}: ${this.screenshotLabel(shot.label)}`)}">${this.escape(this.screenshotLabel(shot.label))}</button>`)

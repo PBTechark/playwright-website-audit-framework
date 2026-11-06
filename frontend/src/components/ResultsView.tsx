@@ -238,7 +238,7 @@ function IssuesTab({
         <div className="mb-4 flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
           <p className="text-ink-2" aria-live="polite">
             <span className="font-semibold text-ink">{plural(filtered.length, 'issue')}</span>
-            {active ? ' match your filters' : ''}, grouped from {plural(results.findings.length, 'finding')} across viewports
+            {active ? ' match your filters' : ''}
           </p>
           <div className="flex gap-4 text-sm">
             {active && (
@@ -526,7 +526,7 @@ function PageCard({
           </a>
           <p className="mt-2 text-sm text-ink-2">
             {page.status !== undefined && <span className={page.status >= 400 ? 'font-semibold text-danger' : ''}>HTTP {page.status}. </span>}
-            {plural(page.issues, 'finding')} across {plural(page.viewports.length, 'viewport')}.
+            {plural(page.issues, 'issue')} across {plural(page.viewports.length, 'viewport')}.
           </p>
         </div>
         {page.issues > 0 && (
@@ -545,7 +545,7 @@ function PageCard({
                 {viewport.resolution && <span className="ml-2 font-normal text-ink-3">{viewport.resolution.replace(`${viewport.viewport} — `, '')}</span>}
               </h4>
               <span className="text-sm text-ink-3">
-                {plural(viewport.issues, 'finding')}
+                {plural(viewport.issues, 'issue')}
                 {viewport.loadTimeMs !== undefined && `, loaded in ${(viewport.loadTimeMs / 1000).toFixed(1)} s`}
               </span>
             </div>

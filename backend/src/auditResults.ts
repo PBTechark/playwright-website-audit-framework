@@ -65,13 +65,27 @@ export function readRawResults(rawResultsDir: string, since?: Date): AuditResult
     .filter((result): result is AuditResult => Boolean(result));
 }
 
+/**
+ * Same key as the dashboard's issue list and the HTML report: findings of one problem on one page
+ * (one per element and viewport) count as one issue, so every count a reader sees agrees.
+ */
+function issueKey(issue: AuditIssue, result: AuditResult): string {
+  return [issue.severity, issue.category, issue.url || result.page.url, issue.description].join('\u0000');
+}
+
+function countIssues(result: AuditResult): number {
+  return new Set(result.issues.map((issue) => issueKey(issue, result))).size;
+}
+
 export function buildSummary(results: AuditResult[], viewports: string[], healthScore: number | null): AuditSummary {
-  const issues = results.flatMap((result) => result.issues);
-  const count = (severity: AuditIssue['severity']) => issues.filter((issue) => issue.severity === severity).length;
+  const issues = new Map<string, AuditIssue['severity']>();
+  for (const result of results) for (const issue of result.issues) issues.set(issueKey(issue, result), issue.severity);
+  const severities = [...issues.values()];
+  const count = (severity: AuditIssue['severity']) => severities.filter((value) => value === severity).length;
   return {
     pagesTested: new Set(results.map((result) => result.page.url)).size,
     viewportsTested: viewports.filter((viewport) => results.some((result) => result.viewport === viewport)),
-    totalIssues: issues.length,
+    totalIssues: issues.size,
     critical: count('Critical'),
     high: count('High'),
     medium: count('Medium'),
@@ -107,6 +121,7 @@ export function buildFindings(results: AuditResult[]): Finding[] {
 
 export function buildPages(results: AuditResult[], viewportOrder: string[]): PageResult[] {
   const pages = new Map<string, PageResult>();
+  const pageIssues = new Map<string, Set<string>>();
   for (const result of results) {
     const page = pages.get(result.page.url) ?? {
       url: result.page.url,
@@ -115,11 +130,14 @@ export function buildPages(results: AuditResult[], viewportOrder: string[]): Pag
       issues: 0,
       viewports: []
     };
-    page.issues += result.issues.length;
+    const keys = pageIssues.get(page.url) ?? new Set<string>();
+    result.issues.forEach((issue) => keys.add(issueKey(issue, result)));
+    pageIssues.set(page.url, keys);
+    page.issues = keys.size;
     page.viewports.push({
       viewport: result.viewport,
       resolution: result.resolution?.label,
-      issues: result.issues.length,
+      issues: countIssues(result),
       screenshots: result.screenshots
         .map((shot) => ({ label: shot.label, path: toEvidencePath(shot.path) }))
         .filter((shot): shot is { label: string; path: string } => Boolean(shot.path)),

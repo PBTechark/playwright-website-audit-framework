@@ -163,7 +163,8 @@ export function createApiRouter(store: AuditStore, runner: AuditRunner, auth: Au
       const body: AuditResultsResponse = {
         audit,
         available: results.length > 0,
-        summary: audit.summary ?? buildSummary(results, audit.settings.viewports, null),
+        // Rebuilt from the results so audits stored before issue grouping show the same counts too.
+        summary: results.length || !audit.summary ? buildSummary(results, audit.settings.viewports, audit.summary?.healthScore ?? null) : audit.summary,
         findings: buildFindings(results),
         pages: buildPages(results, audit.settings.viewports),
         reports: listReports(artifactsDir),
