@@ -123,7 +123,15 @@ The audit flow is automatic:
 
 Button visibility findings include a dedicated annotated screenshot, copied CSS selector, and element identification details (label, tag, computed visibility, and rendered size). If a hidden control has no rendered box, the evidence marks its nearest visible container and explains that the control itself has no visible location to outline. Button findings do not reuse unrelated page screenshots.
 
+The visual audit separately checks visible form controls sharing a horizontal row for vertical-center drift. Findings include per-control bounding boxes, the measured center spread and tolerance, and highlighted control evidence. This additive check does not change the existing DOM detector result cap or form label/input alignment check; stacked layouts and rows with fewer than three controls are ignored.
+
 When a navigation returns HTTP 4xx/5xx, the audit reports the deployment response and skips page-content checks for that viewport. This prevents access-denied or server-error pages from being misreported as missing headers, footers, or content. The header-logo link is checked separately, including off-site destinations and its complete HTTP redirect chain; an off-site final destination is reported as a high-severity link issue.
+
+### Precision-first search/filter functional checks
+
+On Desktop Full HD, the audit looks for same-origin `GET` forms with clearly labeled single-select filters and a search/filter submit control. It creates cases from filter values explicitly present in listing records, then checks them against an unfiltered baseline. A visible baseline record proves that at least one match exists; the baseline does not need to expose the entire dataset. A reported baseline count must not contradict the extracted records. To report missing results, the filtered page must settle without request/runtime errors, preserve the selected values, and either show a stable explicit empty state (with a zero count if it provides one) or expose a complete, non-paginated result set whose records can be checked. Failed requests, HTTP errors, JavaScript/console errors, ambiguous records, unstable results, and incomplete filtered results cause the check to be **Not verified**, not a defect.
+
+This intentionally favors precision over coverage. Many sites will be skipped unless their markup exposes a complete count and labeled record attributes; the check does not guess whether a zero-result message is wrong. It only uses safe-looking, same-origin GET search forms, never submits POST forms, and caps generated filter cases per page. No browser-only detector can guarantee zero false positives against incorrect source data or dishonest/inaccurate result counts, so findings should still be reviewed as site behavior changes.
 
 ## Reports
 

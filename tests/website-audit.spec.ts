@@ -20,12 +20,20 @@ import { LinkValidator } from '../validators/LinkValidator';
 import { PopupValidator } from '../validators/PopupValidator';
 import { ContextMenuValidator } from '../validators/ContextMenuValidator';
 import { VideoValidator } from '../validators/VideoValidator';
+import { SearchFilterAudit } from '../audits/SearchFilterAudit';
 import { ensureDir, readJsonFile, safeFileName, writeJsonFile } from '../utils/fileSystem';
 import { collectPerformanceMetrics } from '../utils/performanceMetrics';
 import { markNetworkNeverIdle } from '../utils/evidence';
 import { createIssue } from '../utils/issueFactory';
 import { isReportableIssue } from '../utils/reportFilters';
-import { AuditCheck, AuditIssue, AuditResult, PageInventoryItem, PerformanceMetrics, ViewportResolution } from '../utils/types';
+import {
+  AuditCheck,
+  AuditIssue,
+  AuditResult,
+  PageInventoryItem,
+  PerformanceMetrics,
+  ViewportResolution
+} from '../utils/types';
 
 const inventory = readJsonFile<PageInventoryItem[]>(auditConfig.inventoryPath, []);
 
@@ -39,16 +47,21 @@ async function attachIfExists(testInfo: TestInfo, name: string, relativePath: st
 }
 
 function isUserVisibleActionIssue(issue: AuditIssue): boolean {
-  return issue.category === 'Visual' ||
+  return (
+    issue.category === 'Visual' ||
     issue.category === 'Videos' ||
     /Header logo (?:navigates outside the audited website|link has a failure)/i.test(issue.description) ||
-    /Visible CTA link has no actionable destination/i.test(issue.description);
+    /Visible CTA link has no actionable destination/i.test(issue.description)
+  );
 }
 
 function issueSummary(issues: AuditIssue[]): string {
   return issues
     .slice(0, 10)
-    .map((issue, index) => `${index + 1}. [${issue.category}/${issue.severity}] ${issue.description}${issue.selector ? ` (${issue.selector})` : ''}`)
+    .map(
+      (issue, index) =>
+        `${index + 1}. [${issue.category}/${issue.severity}] ${issue.description}${issue.selector ? ` (${issue.selector})` : ''}`
+    )
     .join('\n');
 }
 
@@ -66,11 +79,21 @@ test.describe('Automated website audit', () => {
       let metrics: PerformanceMetrics | undefined;
 
       try {
+<<<<<<< HEAD
         const response = await page.goto(pageItem.url, {
           waitUntil: 'domcontentloaded',
           timeout: auditConfig.navigationTimeoutMs
         }).catch(() => null);
         await page.waitForLoadState('networkidle', { timeout: 10_000 }).catch(() => markNetworkNeverIdle(page));
+=======
+        const response = await page
+          .goto(pageItem.url, {
+            waitUntil: 'domcontentloaded',
+            timeout: auditConfig.navigationTimeoutMs
+          })
+          .catch(() => null);
+        await page.waitForLoadState('networkidle', { timeout: 10_000 }).catch(() => undefined);
+>>>>>>> 6e5e01d682bc2c3e59d4fd2b7f704bbc4fb748e6
 
         const browserViewport = page.viewportSize();
         const runtimeScreen = await page.evaluate(() => ({
@@ -139,10 +162,12 @@ test.describe('Automated website audit', () => {
               contentType: 'application/json'
             });
             const popupFailures = popupResult.checks.filter((check) => check.result === 'FAIL');
-            expect.soft(
-              popupFailures.length,
-              `Popup close validation failed with ${popupFailures.length} assertion(s) at ${resolution.label}`
-            ).toBe(0);
+            expect
+              .soft(
+                popupFailures.length,
+                `Popup close validation failed with ${popupFailures.length} assertion(s) at ${resolution.label}`
+              )
+              .toBe(0);
           }
 
           const visual = await new VisualAudit().run(page, pageItem.url, viewport, pageItem.targetName);
@@ -174,10 +199,12 @@ test.describe('Automated website audit', () => {
               contentType: 'application/json'
             });
             const contextMenuFailures = contextMenuResult.checks.filter((check) => check.result === 'FAIL');
-            expect.soft(
-              contextMenuFailures.length,
-              `Context-menu validation failed with ${contextMenuFailures.length} assertion(s) at ${resolution.label}`
-            ).toBe(0);
+            expect
+              .soft(
+                contextMenuFailures.length,
+                `Context-menu validation failed with ${contextMenuFailures.length} assertion(s) at ${resolution.label}`
+              )
+              .toBe(0);
           }
 
           const contentIntegrityResult = await new ContentIntegrityAudit().run(
@@ -190,31 +217,62 @@ test.describe('Automated website audit', () => {
           checks.push(...contentIntegrityResult.checks);
           issues.push(...contentIntegrityResult.issues);
           screenshots.push(...contentIntegrityResult.screenshots);
-          const contentIntegrityFailures = contentIntegrityResult.checks.filter((check) => check.result === 'FAIL');
+          const contentIntegrityFailures = contentIntegrityResult.checks.filter(
+            (check) => check.result === 'FAIL'
+          );
           if (contentIntegrityFailures.length > 0) {
             await testInfo.attach('content-integrity-assertions', {
               body: JSON.stringify(contentIntegrityResult, null, 2),
               contentType: 'application/json'
             });
-            expect.soft(
-              contentIntegrityFailures.length,
-              `Content-integrity validation failed with ${contentIntegrityFailures.length} assertion(s) at ${resolution.label}`
-            ).toBe(0);
+            expect
+              .soft(
+                contentIntegrityFailures.length,
+                `Content-integrity validation failed with ${contentIntegrityFailures.length} assertion(s) at ${resolution.label}`
+              )
+              .toBe(0);
           }
 
           issues.push(...(await new HeaderValidator().validate(page, pageItem.url, viewport, isMobile)));
           issues.push(...(await new FooterValidator().validate(page, pageItem.url, viewport)));
           issues.push(...(await new ResponsiveAudit().run(page, pageItem.url, viewport, isMobile)));
-          issues.push(...(await new SecurityAudit().run(page, pageItem.url, viewport, response ?? undefined)));
+          issues.push(
+            ...(await new SecurityAudit().run(page, pageItem.url, viewport, response ?? undefined))
+          );
           issues.push(...(await new FormValidator().validate(page, pageItem.url, viewport)));
-          issues.push(...(await new ButtonValidator().validate(page, pageItem.url, viewport, pageItem.targetName)));
+          issues.push(
+            ...(await new ButtonValidator().validate(page, pageItem.url, viewport, pageItem.targetName))
+          );
 
-          const linkResult = await new LinkValidator(api, pageItem.targetBaseUrl, pageItem.targetName).validate(
+          if (viewport === 'Desktop Full HD') {
+            const searchFilterResult = await new SearchFilterAudit().run(
+              page,
+              pageItem.url,
+              viewport,
+              pageItem.targetName
+            );
+            checks.push(...searchFilterResult.checks);
+            issues.push(...searchFilterResult.issues);
+            screenshots.push(...searchFilterResult.screenshots);
+            if (searchFilterResult.checks.length > 0) {
+              await testInfo.attach('search-filter-functional-audit', {
+                body: JSON.stringify(searchFilterResult, null, 2),
+                contentType: 'application/json'
+              });
+            }
+          }
+
+          const linkResult = await new LinkValidator(
+            api,
+            pageItem.targetBaseUrl,
+            pageItem.targetName
+          ).validate(page, pageItem.url, viewport);
+          const imageResult = await new ImageValidator(api).validate(
             page,
             pageItem.url,
-            viewport
+            viewport,
+            pageItem.targetName
           );
-          const imageResult = await new ImageValidator(api).validate(page, pageItem.url, viewport, pageItem.targetName);
           const videoResult = await new VideoValidator(api).validate(
             page,
             pageItem.url,
@@ -227,7 +285,9 @@ test.describe('Automated website audit', () => {
           screenshots.push(...videoResult.screenshots);
           issues.push(...linkResult.issues, ...imageResult.issues, ...videoResult.issues);
 
-          const linkFailures = linkResult.findings.filter((finding) => finding.statusCode === 404 || finding.statusCode === 500);
+          const linkFailures = linkResult.findings.filter(
+            (finding) => finding.statusCode === 404 || finding.statusCode === 500
+          );
           if (linkResult.issues.length > 0 || linkFailures.length > 0) {
             await testInfo.attach('link-findings', {
               body: JSON.stringify({ findings: linkResult.findings, issues: linkResult.issues }, null, 2),
@@ -237,10 +297,14 @@ test.describe('Automated website audit', () => {
 
           if (videoResult.findings.length > 0 || videoResult.checks.length > 0) {
             await testInfo.attach('video-findings', {
-              body: JSON.stringify({
-                findings: videoResult.findings,
-                issues: videoResult.issues
-              }, null, 2),
+              body: JSON.stringify(
+                {
+                  findings: videoResult.findings,
+                  issues: videoResult.issues
+                },
+                null,
+                2
+              ),
               contentType: 'application/json'
             });
             await testInfo.attach('video-assertions', {
@@ -252,38 +316,46 @@ test.describe('Automated website audit', () => {
             }
           }
 
-          const userVisibleIssues = issues.filter((issue) => isReportableIssue(issue) && isUserVisibleActionIssue(issue));
+          const userVisibleIssues = issues.filter(
+            (issue) => isReportableIssue(issue) && isUserVisibleActionIssue(issue)
+          );
           if (userVisibleIssues.length > 0) {
             await testInfo.attach('human-visible-findings', {
               body: JSON.stringify({ issues: userVisibleIssues }, null, 2),
               contentType: 'application/json'
             });
-            expect.soft(
-              userVisibleIssues.length,
-              `Human-visible validation failed with ${userVisibleIssues.length} issue(s) at ${resolution.label}\n${issueSummary(userVisibleIssues)}`
-            ).toBe(0);
+            expect
+              .soft(
+                userVisibleIssues.length,
+                `Human-visible validation failed with ${userVisibleIssues.length} issue(s) at ${resolution.label}\n${issueSummary(userVisibleIssues)}`
+              )
+              .toBe(0);
           }
 
           if (linkFailures.length > 0) {
-            expect.soft(
-              linkFailures.length,
-              `Link validation failed with ${linkFailures.length} 404/500 findings at ${resolution.label}`
-            ).toBe(0);
+            expect
+              .soft(
+                linkFailures.length,
+                `Link validation failed with ${linkFailures.length} 404/500 findings at ${resolution.label}`
+              )
+              .toBe(0);
           }
 
           // Fail the test immediately if image validation reports Critical/High issues and attach evidence
-          const imageBlocking = imageResult.issues.filter((i) =>
-            isReportableIssue(i) && (i.severity === 'Critical' || i.severity === 'High')
+          const imageBlocking = imageResult.issues.filter(
+            (i) => isReportableIssue(i) && (i.severity === 'Critical' || i.severity === 'High')
           );
           if (imageBlocking.length > 0) {
             await testInfo.attach('image-findings', {
               body: JSON.stringify({ findings: imageResult.findings, issues: imageResult.issues }, null, 2),
               contentType: 'application/json'
             });
-            expect.soft(
-              imageBlocking.length,
-              `Image validation failed with ${imageBlocking.length} Critical/High findings at ${resolution.label}`
-            ).toBe(0);
+            expect
+              .soft(
+                imageBlocking.length,
+                `Image validation failed with ${imageBlocking.length} Critical/High findings at ${resolution.label}`
+              )
+              .toBe(0);
           }
 
           metrics = await collectPerformanceMetrics(page, signals);
@@ -302,10 +374,14 @@ test.describe('Automated website audit', () => {
 
           if ((metrics.cumulativeLayoutShift ?? 0) > 0.25) {
             await testInfo.attach('performance-cls-supporting-signal', {
-              body: JSON.stringify({
-                metrics,
-                note: 'CLS is retained as supporting evidence. Visible layout movement is evaluated by VisualAudit.'
-              }, null, 2),
+              body: JSON.stringify(
+                {
+                  metrics,
+                  note: 'CLS is retained as supporting evidence. Visible layout movement is evaluated by VisualAudit.'
+                },
+                null,
+                2
+              ),
               contentType: 'application/json'
             });
           }
@@ -320,10 +396,12 @@ test.describe('Automated website audit', () => {
               body: JSON.stringify(criticalJavaScriptIssues, null, 2),
               contentType: 'application/json'
             });
-            expect.soft(
-              criticalJavaScriptIssues.length,
-              `Critical JavaScript validation failed at ${resolution.label}`
-            ).toBe(0);
+            expect
+              .soft(
+                criticalJavaScriptIssues.length,
+                `Critical JavaScript validation failed at ${resolution.label}`
+              )
+              .toBe(0);
           }
         }
 
@@ -367,7 +445,6 @@ test.describe('Automated website audit', () => {
           type: 'audit-findings',
           description: `${blockingIssues.length} critical/high; ${issues.length} total`
         });
-
       } finally {
         await api.dispose();
       }
