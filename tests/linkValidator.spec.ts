@@ -57,6 +57,45 @@ test('does not report close controls as missing CTA destinations', async ({ page
   }
 });
 
+test('does not report accordion fragment links with a valid controlled panel as missing anchors', async ({ page }) => {
+  const server = createServer((_request, response) => {
+    response.writeHead(200, { 'content-type': 'text/html' });
+    response.end(`
+      <h3 id="accordion-trigger" role="tab" aria-controls="accordion-panel" aria-expanded="false">
+        <a href="#how-do-your-receptionists-know-what-to-say">How do your receptionists know what to say?</a>
+      </h3>
+      <div id="accordion-panel" role="tabpanel" hidden>Accordion answer</div>
+      <a href="#missing-target">Broken in-page link</a>
+    `);
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const address = server.address() as AddressInfo;
+  const origin = `http://127.0.0.1:${address.port}/`;
+  const api = await request.newContext({ ignoreHTTPSErrors: true });
+
+  try {
+    await page.goto(origin);
+    const result = await new LinkValidator(api, origin).validate(page, origin, 'Desktop');
+    const missingAnchorIssues = result.issues.filter((issue) =>
+      issue.description.startsWith('Anchor target is missing:')
+    );
+
+    expect(missingAnchorIssues).toEqual([
+      expect.objectContaining({
+        description: 'Anchor target is missing: #missing-target'
+      })
+    ]);
+  } finally {
+    await api.dispose();
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
+});
+
 test('reports a header logo that resolves to another hostname and includes its redirect chain', async ({
   page
 }) => {

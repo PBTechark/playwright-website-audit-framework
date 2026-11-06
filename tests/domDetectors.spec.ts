@@ -365,6 +365,32 @@ test('does not report DOM overflow when users cannot horizontally scroll', async
   expect(defects.filter((item) => item.type === 'Off-screen Content')).toHaveLength(0);
 });
 
+test('does not report page horizontal scroll for content overflow contained within the viewport', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.setContent(`
+    <style>
+      body { margin:0; }
+      header { width:500px; height:80px; }
+      #menu-content { width:600px; height:80px; }
+    </style>
+    <header><nav id="menu-content"><a href="/services">Services</a></nav></header>
+    <main><h1>Page content remains within the viewport</h1></main>
+  `);
+
+  const widths = await page.evaluate(() => ({
+    page: document.documentElement.scrollWidth,
+    viewport: document.documentElement.clientWidth,
+    headerScroll: document.querySelector('header')?.scrollWidth,
+    headerClient: document.querySelector('header')?.clientWidth
+  }));
+  expect(widths.headerScroll).toBeGreaterThan(widths.headerClient ?? 0);
+  expect(widths.page).toBe(widths.viewport);
+
+  const defects = await detectDomDefects(page);
+
+  expect(defects.filter((item) => item.type === 'Horizontal Scroll')).toHaveLength(0);
+});
+
 test('reports horizontal scroll only when visible content creates a user-scrollable defect', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.setContent(`

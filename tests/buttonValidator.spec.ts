@@ -21,10 +21,10 @@ test.describe('Button validator evidence', () => {
 
     const issues = await new ButtonValidator().validate(page, 'https://example.com/', 'Desktop Full HD');
 
-    expect(issues.filter((issue) => issue.description.includes('unreadable on hover'))).toHaveLength(0);
+    expect(issues.filter((issue) => issue.description.includes('Hover-state text contrast'))).toHaveLength(0);
   });
 
-  test('does not label readable button text as disappearing when low contrast is unchanged on hover', async ({ page }) => {
+  test('does not report a hover-specific contrast regression when contrast is already low at baseline', async ({ page }) => {
     await page.setContent(`
       <style>
         button {
@@ -40,7 +40,7 @@ test.describe('Button validator evidence', () => {
 
     const issues = await new ButtonValidator().validate(page, 'https://example.com/', 'Desktop Full HD');
 
-    expect(issues.filter((issue) => issue.description.includes('unreadable on hover'))).toHaveLength(0);
+    expect(issues.filter((issue) => issue.description.includes('Hover-state text contrast'))).toHaveLength(0);
   });
 
   test('reports button text contrast that becomes low specifically on hover', async ({ page }) => {
@@ -59,15 +59,25 @@ test.describe('Button validator evidence', () => {
     `);
 
     const issues = await new ButtonValidator().validate(page, 'https://example.com/', 'Desktop Full HD');
-    const issue = issues.find((candidate) => candidate.description.includes('unreadable on hover'));
+    const issue = issues.find((candidate) => candidate.description.includes('Hover-state text contrast'));
 
     expect(issue).toBeDefined();
+    expect(issue).toMatchObject({
+      category: 'Accessibility',
+      severity: 'Medium',
+      description: 'Hover-state text contrast is insufficient: Call now.'
+    });
     expect(issue?.details).toMatchObject({
       hover: {
         baselineContrastRatio: 21,
-        contrastRatio: 2.15
+        baselineContrastThreshold: 4.5,
+        contrastRatio: 2.15,
+        contrastThreshold: 4.5,
+        fontSize: 13.3,
+        fontWeight: 400
       }
     });
+    expect(issue?.actual).toContain('4.5:1 is required for 13.3px text');
   });
 
   test('resolves dynamically referenced hidden navigation controls despite unrelated hrefs', async ({ page }) => {

@@ -286,7 +286,19 @@ export class LinkValidator {
             const target = new URL(anchor.href, pageUrl);
             if (target.href.split('#')[0] !== pageUrl.split('#')[0] || !target.hash) return null;
             const id = decodeURIComponent(target.hash.slice(1));
-            return document.getElementById(id) ? null : target.hash;
+            if (
+              document.getElementById(id) ||
+              Array.from(document.getElementsByName(id)).some((element) => element instanceof HTMLAnchorElement)
+            ) {
+              return null;
+            }
+
+            const accordionTrigger = anchor.closest<HTMLElement>('[role="tab"], .ui-accordion-header');
+            const controlledPanelId = accordionTrigger?.getAttribute('aria-controls');
+            const hasControlledPanel =
+              Boolean(accordionTrigger?.hasAttribute('aria-expanded')) &&
+              Boolean(controlledPanelId && document.getElementById(controlledPanelId));
+            return hasControlledPanel ? null : target.hash;
           } catch {
             return null;
           }

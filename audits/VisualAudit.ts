@@ -63,6 +63,21 @@ export class VisualAudit {
         typeof affectedSelector === 'string' &&
         typeof overlapOccludingSelector === 'string'
       ) {
+        const overlapScrollX = defect.details.scrollX;
+        const overlapScrollY = defect.details.scrollY;
+        if (
+          typeof overlapScrollX === 'number' && Number.isFinite(overlapScrollX) &&
+          typeof overlapScrollY === 'number' && Number.isFinite(overlapScrollY)
+        ) {
+          await page.evaluate(
+            ({ scrollX, scrollY }) => window.scrollTo({ left: scrollX, top: scrollY, behavior: 'instant' }),
+            { scrollX: overlapScrollX, scrollY: overlapScrollY }
+          );
+          await page.waitForTimeout(100);
+        }
+        if (!(await evidence.isOverlapCurrentlyBlocking(affectedSelector, overlapOccludingSelector))) {
+          continue;
+        }
         const overlapShot = await evidence.captureOverlapDiagnostic(
           `defect-${index}-overlap-diagnostic`,
           affectedSelector,

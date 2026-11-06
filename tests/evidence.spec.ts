@@ -5,6 +5,27 @@ import { EvidenceManager } from '../utils/evidence';
 import { VisualAudit } from '../audits/VisualAudit';
 
 test.describe('Evidence manager', () => {
+  test('does not confirm an accordion heading and navigation link that do not overlap', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await page.setContent(`
+      <style>
+        body { margin: 0; min-height: 1200px; }
+        header a { position: fixed; top: 20px; right: 20px; }
+        .accordion { position: absolute; top: 900px; left: 40%; width: 400px; }
+      </style>
+      <header><a id="navigation" href="/learn-more">LEARN MORE</a></header>
+      <div class="accordion">
+        <h3 role="tab" aria-expanded="false">
+          <a id="accordion-heading" href="#faq">How much do your services cost?</a>
+        </h3>
+      </div>
+    `);
+
+    const evidence = new EvidenceManager(page, 'https://example.com/', 'Desktop');
+
+    expect(await evidence.isOverlapCurrentlyBlocking('#accordion-heading', '#navigation')).toBe(false);
+  });
+
   test('captures highlighted element region for visual defect evidence', async ({ page }) => {
     await page.setViewportSize({ width: 800, height: 600 });
     await page.setContent(`
@@ -68,6 +89,8 @@ test.describe('Evidence manager', () => {
       route.fulfill({ contentType: 'text/html', body: markup })
     );
     await page.goto('https://example.com/overlap');
+    const overlapEvidence = new EvidenceManager(page, 'https://example.com/overlap', 'iPad Pro Portrait', 'test-target');
+    expect(await overlapEvidence.isOverlapCurrentlyBlocking('#target-button', '#corner-ribbon')).toBe(true);
     const result = await new VisualAudit().run(page, 'https://example.com/overlap', 'iPad Pro Portrait', 'test-target');
     const issue = result.issues.find((candidate) =>
       candidate.description.startsWith('Element Overlap:') &&

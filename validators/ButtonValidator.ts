@@ -28,7 +28,11 @@ type HoverState = {
   color: string;
   backgroundColor: string;
   contrastRatio: number | null;
+  contrastThreshold: number | null;
+  fontSize: number;
+  fontWeight: number;
   baselineContrastRatio?: number | null;
+  baselineContrastThreshold?: number | null;
   rect: { width: number; height: number };
   textRect: { width: number; height: number } | null;
   reason?: string;
@@ -273,15 +277,21 @@ export class ButtonValidator {
           const shot = await captureIssueEvidence();
           issues.push(
             createIssue({
-              category: 'Buttons',
+              category: hover.reason.startsWith('Hover-state text contrast')
+                ? 'Accessibility'
+                : 'Buttons',
               url,
               viewport,
               selector: button.selector,
-              description: `Button text disappears or becomes unreadable on hover: ${button.text}.`,
-              severity: 'High',
-              expected: 'Human-visible button text remains visible and readable after hover.',
+              description: hover.reason.startsWith('Hover-state text contrast')
+                ? `Hover-state text contrast is insufficient: ${button.text}.`
+                : `Button text becomes unavailable on hover: ${button.text}.`,
+              severity: hover.reason.startsWith('Hover-state text contrast') ? 'Medium' : 'High',
+              expected: 'Hover-state text meets the WCAG AA contrast requirement and remains visible.',
               actual: hover.reason,
-              suggestedFix: 'Adjust hover text color, background color, opacity, visibility, or transition styles so the label remains readable.',
+              suggestedFix: hover.reason.startsWith('Hover-state text contrast')
+                ? 'Adjust the hover text or background color to meet the WCAG AA contrast ratio for its text size.'
+                : 'Adjust hover styles so the label remains visible and available.',
               details: { ...button, hover },
               ...evidenceFields(shot)
             })
@@ -323,6 +333,9 @@ export class ButtonValidator {
           color: '',
           backgroundColor: '',
           contrastRatio: null,
+          contrastThreshold: null,
+          fontSize: 0,
+          fontWeight: 0,
           rect: { width: 0, height: 0 },
           textRect: null,
           reason: 'The hovered button could not be found in the DOM.'
@@ -397,6 +410,14 @@ export class ButtonValidator {
       const textNode = textNodeRange(element);
       const textRect = textNode?.rect ?? null;
       const textStyle = textNode ? getComputedStyle(textNode.element) : style;
+      const fontSize = Number.parseFloat(textStyle.fontSize) || Number.parseFloat(style.fontSize) || 16;
+      const parsedFontWeight = Number.parseFloat(textStyle.fontWeight);
+      const fontWeight = Number.isFinite(parsedFontWeight)
+        ? parsedFontWeight
+        : textStyle.fontWeight === 'bold'
+          ? 700
+          : 400;
+      const contrastThreshold = fontSize >= 24 || (fontSize >= 18.67 && fontWeight >= 700) ? 3 : 4.5;
       const text = (element.innerText || element.textContent || element.getAttribute('aria-label') || '').trim();
       const backgroundColor = textNode ? effectiveBackground(textNode.element) : null;
       const contrastRatio = backgroundColor ? contrast(textStyle.color, backgroundColor) : null;
@@ -412,8 +433,8 @@ export class ButtonValidator {
         reason = 'Hover state leaves the button with no visible or accessible text.';
       } else if (textRect && (textRect.width <= 1 || textRect.height <= 1)) {
         reason = `Hover state collapses the text box to ${textRect.width.toFixed(1)}x${textRect.height.toFixed(1)}.`;
-      } else if (contrastRatio !== null && contrastRatio < 3) {
-        reason = `Hover state text contrast is ${contrastRatio}:1 against ${backgroundColor}; text color is ${textStyle.color}.`;
+      } else if (contrastRatio !== null && contrastRatio < contrastThreshold) {
+        reason = `Hover-state text contrast is ${contrastRatio}:1; ${contrastThreshold}:1 is required for ${fontSize.toFixed(1)}px text against ${backgroundColor} (text color ${textStyle.color}).`;
       }
       return {
         text,
@@ -424,6 +445,9 @@ export class ButtonValidator {
         color: textStyle.color,
         backgroundColor: backgroundColor ?? 'unmeasurable',
         contrastRatio,
+        contrastThreshold: backgroundColor ? contrastThreshold : null,
+        fontSize: Number(fontSize.toFixed(1)),
+        fontWeight,
         rect: { width: Number(rect.width.toFixed(1)), height: Number(rect.height.toFixed(1)) },
         textRect: textRect ? { width: Number(textRect.width.toFixed(1)), height: Number(textRect.height.toFixed(1)) } : null,
         reason
@@ -435,14 +459,17 @@ export class ButtonValidator {
     const hovered = await readState();
     const contrastBecameLow =
       baseline.contrastRatio !== null &&
-      baseline.contrastRatio >= 3 &&
+      baseline.contrastThreshold !== null &&
+      baseline.contrastRatio >= baseline.contrastThreshold &&
       hovered.contrastRatio !== null &&
-      hovered.contrastRatio < 3;
+      hovered.contrastThreshold !== null &&
+      hovered.contrastRatio < hovered.contrastThreshold;
     return {
       ...hovered,
       baselineContrastRatio: baseline.contrastRatio,
+      baselineContrastThreshold: baseline.contrastThreshold,
       reason:
-        hovered.reason?.startsWith('Hover state text contrast') && !contrastBecameLow
+        hovered.reason?.startsWith('Hover-state text contrast') && !contrastBecameLow
           ? undefined
           : hovered.reason
     };
