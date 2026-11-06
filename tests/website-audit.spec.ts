@@ -79,21 +79,13 @@ test.describe('Automated website audit', () => {
       let metrics: PerformanceMetrics | undefined;
 
       try {
-<<<<<<< HEAD
-        const response = await page.goto(pageItem.url, {
-          waitUntil: 'domcontentloaded',
-          timeout: auditConfig.navigationTimeoutMs
-        }).catch(() => null);
-        await page.waitForLoadState('networkidle', { timeout: 10_000 }).catch(() => markNetworkNeverIdle(page));
-=======
         const response = await page
           .goto(pageItem.url, {
             waitUntil: 'domcontentloaded',
             timeout: auditConfig.navigationTimeoutMs
           })
           .catch(() => null);
-        await page.waitForLoadState('networkidle', { timeout: 10_000 }).catch(() => undefined);
->>>>>>> 6e5e01d682bc2c3e59d4fd2b7f704bbc4fb748e6
+        await page.waitForLoadState('networkidle', { timeout: 10_000 }).catch(() => markNetworkNeverIdle(page));
 
         const browserViewport = page.viewportSize();
         const runtimeScreen = await page.evaluate(() => ({
