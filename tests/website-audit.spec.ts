@@ -1,5 +1,6 @@
+import fs from 'fs';
 import path from 'path';
-import { request } from '@playwright/test';
+import { request, TestInfo } from '@playwright/test';
 import { test, expect } from '../fixtures/audit-fixtures';
 import { DeploymentAudit } from '../audits/DeploymentAudit';
 import { PerformanceAudit } from '../audits/PerformanceAudit';
@@ -27,6 +28,15 @@ import { isReportableIssue } from '../utils/reportFilters';
 import { AuditCheck, AuditIssue, AuditResult, PageInventoryItem, PerformanceMetrics, ViewportResolution } from '../utils/types';
 
 const inventory = readJsonFile<PageInventoryItem[]>(auditConfig.inventoryPath, []);
+
+/**
+ * Evidence capture returns a path even when SCREENSHOT_MODE=off writes no file, and attaching a
+ * missing file throws, which would fail the test and lose the page's results.
+ */
+async function attachIfExists(testInfo: TestInfo, name: string, relativePath: string): Promise<void> {
+  const filePath = path.join(process.cwd(), relativePath);
+  if (fs.existsSync(filePath)) await testInfo.attach(name, { path: filePath });
+}
 
 function isUserVisibleActionIssue(issue: AuditIssue): boolean {
   return issue.category === 'Visual' ||
@@ -120,9 +130,7 @@ test.describe('Automated website audit', () => {
           issues.push(...popupResult.issues);
           for (const [issueIndex, issue] of popupResult.issues.entries()) {
             for (const [evidenceIndex, evidencePath] of (issue.evidence ?? []).entries()) {
-              await testInfo.attach(`popup-finding-${issueIndex + 1}-${evidenceIndex + 1}`, {
-                path: path.join(process.cwd(), evidencePath)
-              });
+              await attachIfExists(testInfo, `popup-finding-${issueIndex + 1}-${evidenceIndex + 1}`, evidencePath);
             }
           }
           if (popupResult.checks.length > 0) {
@@ -147,10 +155,7 @@ test.describe('Automated website audit', () => {
               contentType: 'application/json'
             });
             for (const screenshot of visual.screenshots) {
-              const screenshotPath = path.join(process.cwd(), screenshot.path);
-              await testInfo.attach(`visual-evidence-${screenshot.label}`, {
-                path: screenshotPath
-              });
+              await attachIfExists(testInfo, `visual-evidence-${screenshot.label}`, screenshot.path);
             }
           }
 
@@ -243,10 +248,7 @@ test.describe('Automated website audit', () => {
               contentType: 'application/json'
             });
             for (const screenshot of videoResult.screenshots) {
-              const screenshotPath = path.join(process.cwd(), screenshot.path);
-              await testInfo.attach(`video-evidence-${screenshot.label}`, {
-                path: screenshotPath
-              });
+              await attachIfExists(testInfo, `video-evidence-${screenshot.label}`, screenshot.path);
             }
           }
 
