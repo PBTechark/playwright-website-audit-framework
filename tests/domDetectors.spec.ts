@@ -567,6 +567,58 @@ test('does not report controls centered on the same form-row baseline', async ({
   expect(defects).toHaveLength(0);
 });
 
+test('detects misaligned controls in a filter row without a form element', async ({ page }) => {
+  await page.setContent(`
+    <style>
+      .filters { display:flex; align-items:flex-start; gap:20px; }
+      select, input { width:130px; height:28px; }
+      button { width:90px; height:28px; }
+      .search { margin-top:12px; }
+    </style>
+    <main>
+      <div id="filters" class="filters">
+        <select aria-label="Property type"><option>All</option></select>
+        <select aria-label="Waitlist status"><option>All</option></select>
+        <div class="search">
+          <input type="search" aria-label="Search">
+          <button>Search</button>
+        </div>
+      </div>
+    </main>
+  `);
+
+  const defects = await detectFormRowAlignmentDefects(page);
+  const defect = defects.find((item) => item.type === 'Form Row Alignment');
+
+  expect(defect).toBeDefined();
+  expect(defect).toMatchObject({
+    selector: '#filters',
+    severity: 'Medium',
+    details: { containerSelector: '#filters' }
+  });
+  expect(defect?.details.controlSelectors).toHaveLength(4);
+});
+
+test('does not report aligned controls in a filter row without a form element', async ({ page }) => {
+  await page.setContent(`
+    <style>
+      .filters { display:flex; align-items:center; gap:16px; }
+      select, input { width:120px; height:28px; }
+      button { width:80px; height:28px; }
+    </style>
+    <div id="filters" class="filters">
+      <select aria-label="Type"><option>All</option></select>
+      <select aria-label="Status"><option>All</option></select>
+      <input type="search" aria-label="Search">
+      <button>Search</button>
+    </div>
+  `);
+
+  const defects = await detectFormRowAlignmentDefects(page);
+
+  expect(defects).toHaveLength(0);
+});
+
 test('does not compare controls from separate stacked form rows', async ({ page }) => {
   await page.setContent(`
     <style>

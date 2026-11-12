@@ -1546,14 +1546,19 @@ export async function detectFormRowAlignmentDefects(page: Page): Promise<DomDefe
     };
     const findings: DomDefect[] = [];
     const forms = Array.from(document.querySelectorAll<HTMLFormElement>('form, [role="form"]')).slice(0, 50);
+    const scopes: Array<{ element: HTMLElement; isDocumentScope: boolean }> = [
+      ...forms.map((element) => ({ element, isDocumentScope: false })),
+      { element: document.body, isDocumentScope: true }
+    ];
 
-    for (const form of forms) {
+    for (const scope of scopes) {
       const controls = Array.from(
-        form.querySelectorAll<HTMLElement>(
+        scope.element.querySelectorAll<HTMLElement>(
           'select,textarea,input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not([type="button"]):not([type="reset"]),button[type="submit"],button:not([type]),input[type="submit"]'
         )
       )
         .filter((element) => {
+          if (scope.isDocumentScope && element.closest('form, [role="form"]')) return false;
           if (!isVisible(element)) return false;
           if (element instanceof HTMLInputElement && element.disabled) return false;
           if (element instanceof HTMLButtonElement && element.disabled) return false;
@@ -1607,16 +1612,27 @@ export async function detectFormRowAlignmentDefects(page: Page): Promise<DomDefe
         const threshold = Math.max(8, Math.min(12, medianHeight * 0.25));
         if (centerSpread <= threshold) continue;
 
+        let rowContainer: Element = ordered[0].element;
+        while (
+          rowContainer !== document.body &&
+          !ordered.every((control) => rowContainer.contains(control.element))
+        ) {
+          if (!rowContainer.parentElement) break;
+          rowContainer = rowContainer.parentElement;
+        }
+        if (scope.isDocumentScope && rowContainer === document.body) continue;
+
         const baseline = median(centers);
-        const formSelector = selectorFor(form);
+        const formSelector = selectorFor(scope.isDocumentScope ? rowContainer : scope.element);
         findings.push({
           type: 'Form Row Alignment',
           selector: formSelector,
           description:
-            'Visible controls in the same horizontal form row do not share a consistent vertical center.',
+            'Visible controls in the same horizontal control row do not share a consistent vertical center.',
           severity: 'Medium',
           details: {
             formSelector,
+            containerSelector: formSelector,
             controlSelectors: ordered.map((control) => control.selector),
             controls: ordered.map((control) => ({
               selector: control.selector,
