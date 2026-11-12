@@ -114,3 +114,49 @@ test('reports broken rendering when a visible customer-facing image has no fallb
     })
   ]));
 });
+
+test('scrolls to and reports broken lazy images below the initial viewport', async ({ page }) => {
+  const imageUrl = 'https://assets.test/lazy-broken.png';
+  await page.route(imageUrl, async (route) => {
+    await route.fulfill({ status: 400, contentType: 'text/plain', body: 'Invalid image request' });
+  });
+  await page.setContent(`
+    <div style="height:1800px"></div>
+    <div><img id="lazy-broken" loading="lazy" alt="Team portrait"
+      style="width:120px;height:90px" src="${imageUrl}"></div>
+  `);
+
+  const failedRequest = {
+    get: async () => ({
+      status: () => 400,
+      headers: () => ({ 'content-type': 'text/plain' }),
+      body: async () => Buffer.from('Invalid image request')
+    })
+  } as unknown as APIRequestContext;
+  const result = await new ImageValidator(failedRequest).validate(
+    page,
+    'https://quality.test/images',
+    'Desktop',
+    'quality-test'
+  );
+  const image = await page.locator('#lazy-broken').evaluate((element: HTMLImageElement) => ({
+    complete: element.complete,
+    naturalWidth: element.naturalWidth
+  }));
+  const scrollY = await page.evaluate(() => window.scrollY);
+
+  expect(image).toEqual({ complete: true, naturalWidth: 0 });
+  expect(scrollY).toBe(0);
+  expect(result.issues).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        selector: '#lazy-broken',
+        description: expect.stringContaining('Image HTTP 400')
+      }),
+      expect.objectContaining({
+        selector: '#lazy-broken',
+        description: expect.stringContaining('Broken Image Rendering')
+      })
+    ])
+  );
+});

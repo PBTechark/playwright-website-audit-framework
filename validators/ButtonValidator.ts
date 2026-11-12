@@ -8,6 +8,10 @@ type ButtonSnapshot = {
   text: string;
   visible: boolean;
   expectedResponsiveHidden: boolean;
+  backToTop: boolean;
+  iconControl: boolean;
+  iconState: 'rendered' | 'missing' | 'font-failed' | 'unknown' | null;
+  iconDetails?: Record<string, unknown>;
   disabled: boolean;
   tagName: string;
   role?: string;
@@ -38,8 +42,17 @@ type HoverState = {
   reason?: string;
 };
 
+type BackToTopResult = {
+  visibleAfterScroll: boolean;
+  actionTested: boolean;
+  returnedToTop: boolean;
+  boundingBox: ButtonSnapshot['boundingBox'];
+  error?: string;
+};
+
 export class ButtonValidator {
   async validate(page: Page, url: string, viewport: string, targetName = 'default'): Promise<AuditIssue[]> {
+    await page.evaluate(() => document.fonts.ready.then(() => undefined)).catch(() => undefined);
     const buttons = await page.evaluate(() => {
       const attributeSelector = (element: Element, attribute: string, value: string): string =>
         `${element.tagName.toLowerCase()}[${attribute}="${CSS.escape(value)}"]`;
@@ -160,6 +173,104 @@ export class ButtonValidator {
           hasButtonShape
         );
       };
+      const getAccessibleName = (element: HTMLElement): string => {
+        const ariaLabel = element.getAttribute('aria-label')?.trim();
+        if (ariaLabel) return ariaLabel;
+        const labelledBy = element.getAttribute('aria-labelledby')?.trim().split(/\s+/) ?? [];
+        const labelledText = labelledBy
+          .map((id) => document.getElementById(id)?.textContent?.trim() ?? '')
+          .filter(Boolean)
+          .join(' ');
+        if (labelledText) return labelledText;
+        if (element instanceof HTMLInputElement && element.value.trim()) return element.value.trim();
+        const imageText = Array.from(element.querySelectorAll<HTMLImageElement>('img[alt]'))
+          .map((image) => image.alt.trim())
+          .filter(Boolean)
+          .join(' ');
+        const svgText = Array.from(element.querySelectorAll<SVGTitleElement>('svg title'))
+          .map((title) => title.textContent?.trim() ?? '')
+          .filter(Boolean)
+          .join(' ');
+        return [
+          element.innerText?.trim() || element.textContent?.trim() || '',
+          imageText,
+          svgText,
+          element.getAttribute('title')?.trim() ?? ''
+        ].filter(Boolean).join(' ').trim();
+      };
+      const inspectIcon = (
+        element: HTMLElement,
+        iconElements: HTMLElement[]
+      ): Pick<ButtonSnapshot, 'iconState' | 'iconDetails'> => {
+        const observations = iconElements.map((icon) => {
+          const rect = icon.getBoundingClientRect();
+          const style = window.getComputedStyle(icon);
+          const before = window.getComputedStyle(icon, '::before');
+          const after = window.getComputedStyle(icon, '::after');
+          const pseudoContent = [before.content, after.content].find(
+            (content) => content !== 'none' && content !== 'normal' && content !== '""' && content !== "''"
+          );
+          const fontFamily = (before.content !== 'none' && before.content !== 'normal'
+            ? before.fontFamily
+            : style.fontFamily).split(',')[0].trim().replace(/^['"]|['"]$/g, '');
+          const fontFaces = Array.from(document.fonts).filter(
+            (fontFace) => fontFace.family.replace(/^['"]|['"]$/g, '').toLowerCase() === fontFamily.toLowerCase()
+          );
+          const failedFont = fontFaces.length > 0 && fontFaces.every((fontFace) => fontFace.status === 'error');
+          const image = icon instanceof HTMLImageElement ? icon : icon.querySelector('img');
+          const imageLoaded = image ? image.complete && image.naturalWidth > 0 : undefined;
+          const svg = icon instanceof SVGElement ? icon : icon.querySelector('svg');
+          const svgHasGraphic = svg ? Boolean(svg.querySelector('path,use,circle,rect,polygon,line,polyline')) : undefined;
+          const hasBackground = style.backgroundImage !== 'none' || style.maskImage !== 'none';
+          return {
+            className: typeof icon.className === 'string' ? icon.className : icon.getAttribute('class') ?? '',
+            width: Number(rect.width.toFixed(1)),
+            height: Number(rect.height.toFixed(1)),
+            pseudoContent,
+            fontFamily,
+            fontStatus: fontFaces.map((fontFace) => fontFace.status),
+            failedFont,
+            imageLoaded,
+            svgHasGraphic,
+            hasBackground,
+            hasVisibleGlyph: Boolean(pseudoContent && rect.width > 0 && rect.height > 0)
+          };
+        });
+        const hasFontIconClass = iconElements.some((icon) =>
+          /(^|\s)fa-[\w-]+/.test(typeof icon.className === 'string' ? icon.className : icon.getAttribute('class') ?? '')
+        ) || /(^|\s)fa-[\w-]+/.test(typeof element.className === 'string' ? element.className : '');
+        const failedFont = observations.some((observation) => observation.failedFont);
+        const rendered = observations.some((observation) =>
+          observation.hasVisibleGlyph ||
+          observation.imageLoaded === true ||
+          observation.svgHasGraphic === true ||
+          observation.hasBackground
+        );
+        const hasBrokenImage = observations.some((observation) => observation.imageLoaded === false);
+        const state: ButtonSnapshot['iconState'] = failedFont
+          ? 'font-failed'
+          : rendered
+            ? 'rendered'
+            : hasBrokenImage || hasFontIconClass
+              ? 'missing'
+              : 'unknown';
+        return {
+          iconState: state,
+          iconDetails: {
+            hasFontIconClass,
+            observations
+          }
+        };
+      };
+      const isBackToTop = (element: HTMLElement): boolean => {
+        const identity = [
+          element.id,
+          typeof element.className === 'string' ? element.className : '',
+          element.getAttribute('aria-label') ?? '',
+          element.getAttribute('title') ?? ''
+        ].join(' ');
+        return /back[-_ ]?to[-_ ]?top|scroll[-_ ]?to[-_ ]?top|return[-_ ]?to[-_ ]?top/i.test(identity);
+      };
       return Array.from(document.querySelectorAll<HTMLElement>([
         'button',
         '[role="button"]',
@@ -182,25 +293,43 @@ export class ButtonValidator {
           '[class*="chat" i]',
           '[id*="chat" i]'
         ].join(',')))
-        .filter((button) => looksLikeCta(button))
+        .filter((button) => {
+          const backToTop = isBackToTop(button);
+          const iconElements = Array.from(button.querySelectorAll<HTMLElement>(
+            'i,svg,img,[class*="icon" i],[class*="fa-" i]'
+          ));
+          const selfIsIcon = /(^|\s)(fa-[\w-]+|icon[\w-]*)/i.test(
+            typeof button.className === 'string' ? button.className : ''
+          );
+          const iconOnly = !(button.innerText?.trim() || button.textContent?.trim());
+          const isIconControl = (iconElements.length > 0 || selfIsIcon) && iconOnly;
+          return looksLikeCta(button) || backToTop || isIconControl;
+        })
         .slice(0, 250)
         .map((button): ButtonSnapshot => {
           const rect = button.getBoundingClientRect();
           const style = window.getComputedStyle(button);
+          const backToTop = isBackToTop(button);
+          const iconElements = Array.from(button.querySelectorAll<HTMLElement>(
+            'i,svg,img,[class*="icon" i],[class*="fa-" i]'
+          ));
+          if (/(\bfa-[\w-]+|\bicon[\w-]*)/i.test(typeof button.className === 'string' ? button.className : '')) {
+            iconElements.unshift(button);
+          }
+          const iconControl = iconElements.length > 0 || backToTop;
+          const iconInspection = iconControl ? inspectIcon(button, iconElements) : { iconState: null, iconDetails: undefined };
           const disabled =
             button.hasAttribute('disabled') ||
             button.getAttribute('aria-disabled') === 'true' ||
             (button instanceof HTMLInputElement && button.disabled);
           return {
             selector: selectorFor(button),
-            text:
-              button.innerText?.trim() ||
-              button.textContent?.trim() ||
-              button.getAttribute('aria-label') ||
-              (button instanceof HTMLInputElement ? button.value : '') ||
-              '',
+            text: getAccessibleName(button),
             visible: isVisible(button),
             expectedResponsiveHidden: hasVisibleControlledNavigation(button),
+            backToTop,
+            iconControl,
+            ...iconInspection,
             disabled,
             tagName: button.tagName.toLowerCase(),
             role: button.getAttribute('role') ?? undefined,
@@ -237,7 +366,72 @@ export class ButtonValidator {
         evidenceDetails: shot ? [shot] : []
       });
 
-      if (!button.visible && !button.expectedResponsiveHidden) {
+      let backToTopResult: BackToTopResult | undefined;
+      if (button.backToTop) {
+        backToTopResult = await this.validateBackToTop(page, button);
+        button.visible = backToTopResult.visibleAfterScroll;
+        button.boundingBox = backToTopResult.boundingBox;
+        if (!backToTopResult.visibleAfterScroll ||
+          (backToTopResult.actionTested && !backToTopResult.returnedToTop)) {
+          const shot = await captureIssueEvidence();
+          issues.push(
+            createIssue({
+              category: 'Buttons',
+              url,
+              viewport,
+              selector: button.selector,
+              description: !backToTopResult.visibleAfterScroll
+                ? 'Back-to-top control does not become visible after scrolling.'
+                : 'Back-to-top control does not return the page to the top.',
+              severity: 'Medium',
+              expected: 'The back-to-top control becomes visible while scrolling and returns the page to the top when activated.',
+              actual: backToTopResult.error ??
+                `Visible after scroll: ${backToTopResult.visibleAfterScroll}; returned to top: ${backToTopResult.returnedToTop}.`,
+              suggestedFix: 'Ensure the control is visible after scrolling and its activation smoothly scrolls the current page to the top.',
+              details: { ...button, backToTopResult },
+              ...evidenceFields(shot)
+            })
+          );
+        }
+      }
+
+      if (button.iconControl && button.iconState === 'missing') {
+        const shot = await captureIssueEvidence();
+        issues.push(
+          createIssue({
+            category: 'Buttons',
+            url,
+            viewport,
+            selector: button.selector,
+            description: 'Icon-only control has no rendered icon.',
+            severity: 'Medium',
+            expected: 'The control displays its intended icon.',
+            actual: `An icon control was identified, but no visible icon glyph, loaded image, graphic SVG, or CSS background/mask was found.`,
+            suggestedFix: 'Check the icon markup, CSS pseudo-element, and required icon font or image resource.',
+            details: { ...button, backToTopResult },
+            ...evidenceFields(shot)
+          })
+        );
+      } else if (button.iconControl && button.iconState === 'font-failed') {
+        const shot = await captureIssueEvidence();
+        issues.push(
+          createIssue({
+            category: 'Buttons',
+            url,
+            viewport,
+            selector: button.selector,
+            description: 'Icon font failed to load for an icon-only control.',
+            severity: 'Medium',
+            expected: 'The font used by the control icon loads successfully.',
+            actual: 'The icon font face is present in the document font set but has an error status.',
+            suggestedFix: 'Verify the icon font URL, response status, CORS policy, and font-face declaration.',
+            details: { ...button, backToTopResult },
+            ...evidenceFields(shot)
+          })
+        );
+      }
+
+      if (!button.visible && !button.expectedResponsiveHidden && !button.backToTop) {
         const shot = await captureIssueEvidence();
         issues.push(
           createIssue({
@@ -316,6 +510,87 @@ export class ButtonValidator {
       }
     }
     return issues;
+  }
+
+  private async validateBackToTop(page: Page, button: ButtonSnapshot): Promise<BackToTopResult> {
+    const initialScrollY = await page.evaluate(() => window.scrollY);
+    let result: BackToTopResult = {
+      visibleAfterScroll: false,
+      actionTested: false,
+      returnedToTop: false,
+      boundingBox: button.boundingBox
+    };
+
+    try {
+      await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+      await page.waitForTimeout(150);
+      const locator = page.locator(button.selector).first();
+      const state = await locator.evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        const style = window.getComputedStyle(element);
+        const visibleArea =
+          Math.max(0, Math.min(rect.right, window.innerWidth) - Math.max(rect.left, 0)) *
+          Math.max(0, Math.min(rect.bottom, window.innerHeight) - Math.max(rect.top, 0));
+        return {
+          visible:
+            rect.width > 0 &&
+            rect.height > 0 &&
+            visibleArea > 0 &&
+            style.display !== 'none' &&
+            style.visibility !== 'hidden' &&
+            Number(style.opacity) > 0.01,
+          boundingBox: {
+            x: Number(rect.x.toFixed(1)),
+            y: Number(rect.y.toFixed(1)),
+            width: Number(rect.width.toFixed(1)),
+            height: Number(rect.height.toFixed(1))
+          },
+          safeToActivate: (() => {
+            if (element instanceof HTMLAnchorElement) {
+              const href = element.getAttribute('href')?.trim() ?? '';
+              if (/^javascript:\s*void\s*\(\s*0\s*\)\s*;?$/i.test(href)) return true;
+              try {
+                const destination = new URL(element.href, document.baseURI);
+                return destination.origin === window.location.origin &&
+                  destination.pathname === window.location.pathname &&
+                  destination.search === window.location.search &&
+                  /^#(?:top|page-top|top-of-page)?$/i.test(destination.hash);
+              } catch {
+                return false;
+              }
+            }
+            return element instanceof HTMLButtonElement &&
+              element.type === 'button' &&
+              !element.form;
+          })()
+        };
+      });
+
+      result = {
+        ...result,
+        visibleAfterScroll: state.visible,
+        actionTested: state.safeToActivate,
+        boundingBox: state.boundingBox,
+        returnedToTop: false
+      };
+      if (!state.visible) return result;
+      if (!state.safeToActivate) {
+        return { ...result, error: 'Activation was not attempted because the control is not a safe same-page top action.' };
+      }
+
+      await locator.click({ timeout: 2_000 });
+      await page.waitForFunction(() => window.scrollY <= 4, undefined, { timeout: 2_000 });
+      result.returnedToTop = true;
+      return result;
+    } catch (error) {
+      return {
+        ...result,
+        actionTested: true,
+        error: error instanceof Error ? error.message : String(error)
+      };
+    } finally {
+      await page.evaluate((scrollY) => window.scrollTo(0, scrollY), initialScrollY).catch(() => undefined);
+    }
   }
 
   private async inspectHoverState(page: Page, selector: string): Promise<HoverState> {

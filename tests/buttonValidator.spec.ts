@@ -80,6 +80,92 @@ test.describe('Button validator evidence', () => {
     expect(issue?.actual).toContain('4.5:1 is required for 13.3px text');
   });
 
+  test('discovers icon-only back-to-top controls and reports missing icon, name, and target size', async ({ page }) => {
+    await page.setViewportSize({ width: 800, height: 600 });
+    await page.setContent(`
+      <style>
+        html { scroll-behavior: auto; }
+        body { height: 1800px; margin: 0; }
+        .back-to-top {
+          position: fixed; right: 12px; bottom: 12px;
+          width: 20px; height: 20px; display: block;
+        }
+        .fas::before { content: none; }
+      </style>
+      <div id="top"></div>
+      <main>Long page content</main>
+      <a class="back-to-top" href="javascript:void(0)"><i class="fas fa-arrow-up"></i></a>
+      <script>
+        document.querySelector('.back-to-top').addEventListener('click', () => window.scrollTo(0, 0));
+      </script>
+    `);
+
+    const issues = await new ButtonValidator().validate(page, 'https://example.com/', 'Desktop Full HD');
+
+    expect(issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        description: 'Icon-only control has no rendered icon.',
+        details: expect.objectContaining({ backToTop: true })
+      }),
+      expect.objectContaining({ description: 'Button has no visible or accessible label.' }),
+      expect.objectContaining({ description: 'Clickable button target is smaller than recommended touch size.' })
+    ]));
+    expect(issues.some((issue) => issue.description === 'Back-to-top control does not return the page to the top.')).toBe(false);
+  });
+
+  test('accepts a rendered, labelled back-to-top icon and verifies its safe same-page action', async ({ page }) => {
+    await page.setViewportSize({ width: 800, height: 600 });
+    await page.setContent(`
+      <style>
+        html { scroll-behavior: auto; }
+        body { height: 1800px; margin: 0; }
+        .back-to-top {
+          position: fixed; right: 12px; bottom: 12px;
+          width: 48px; height: 48px; display: block;
+        }
+        .fa-arrow-up::before { content: "↑"; font: 20px Arial, sans-serif; }
+      </style>
+      <div id="top"></div>
+      <main>Long page content</main>
+      <a class="back-to-top" aria-label="Back to top" href="#top">
+        <i class="fas fa-arrow-up"></i>
+      </a>
+    `);
+
+    const issues = await new ButtonValidator().validate(page, 'https://example.com/', 'Desktop Full HD');
+
+    expect(issues.filter((issue) =>
+      issue.description.includes('Icon-only control has no rendered icon') ||
+      issue.description.includes('Icon font failed to load') ||
+      issue.description.includes('Back-to-top control does not')
+    )).toHaveLength(0);
+    expect(issues.filter((issue) => issue.description === 'Button has no visible or accessible label.')).toHaveLength(0);
+  });
+
+  test('checks labelled icon-only links but leaves ordinary text navigation links alone', async ({ page }) => {
+    await page.setContent(`
+      <style>
+        .fa-search::before { content: none; }
+        a { display: inline-block; width: 48px; height: 48px; }
+      </style>
+      <nav>
+        <a href="/home">Home</a>
+        <a href="/search" aria-label="Search"><i class="fa fa-search"></i></a>
+      </nav>
+    `);
+
+    const issues = await new ButtonValidator().validate(page, 'https://example.com/', 'Desktop Full HD');
+
+    expect(issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        description: 'Icon-only control has no rendered icon.',
+        selector: 'a[aria-label="Search"]'
+      })
+    ]));
+    expect(issues.filter((issue) => issue.description === 'Button has no visible or accessible label.')).toHaveLength(0);
+    expect(issues.some((issue) => issue.selector?.includes('/home'))).toBe(false);
+  });
+
   test('resolves dynamically referenced hidden navigation controls despite unrelated hrefs', async ({ page }) => {
     const ariaTargetId = `nav-${Date.now()}-primary`;
     const bootstrapTargetId = `nav-${Date.now()}-secondary`;
