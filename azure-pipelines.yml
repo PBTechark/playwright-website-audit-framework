@@ -67,8 +67,19 @@ stages:
           - script: npx playwright install --with-deps chromium
             displayName: Install Playwright browser
 
-          # Fails only if the engine breaks; findings on the demo page are expected and do not gate.
-          - script: npm run audit
+          # Audit tests fail on any visible defect, and the demo page's defects change without notice.
+          # The engine worked if every page x viewport wrote its raw result (a crash skips that write)
+          # and the report was generated, so judge that instead of the exit code.
+          - script: |
+              set -uo pipefail
+              npm run audit || echo "Audit reported findings; checking that the engine completed every page."
+              expected=$(npx playwright test --config=playwright.config.ts --list | grep -oE 'Total: [0-9]+' | grep -oE '[0-9]+')
+              actual=$(ls reports/raw-results/*.json 2>/dev/null | wc -l)
+              echo "Page x viewport results: $actual of ${expected:-?}"
+              if [ -z "$expected" ] || [ "$actual" -ne "$expected" ] || [ ! -s reports/website-audit-report.html ]; then
+                echo "##vso[task.logissue type=error]The audit engine did not complete every page, or the report is missing."
+                exit 1
+              fi
             displayName: Run smoke audit
             env:
               CI: 'true'
