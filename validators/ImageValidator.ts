@@ -10,7 +10,8 @@ export class ImageValidator {
 
   async validate(page: Page, url: string, viewport: string, targetName = 'default'): Promise<{ issues: AuditIssue[]; findings: ImageFinding[] }> {
     const evidence = new EvidenceManager(page, url, viewport, targetName);
-    await this.waitForVisibleImageDecode(page);
+    const originalScrollY = await page.evaluate(() => window.scrollY);
+    await this.loadLazyImages(page);
     const blurThreshold = auditConfig.imageBlurSharpnessThreshold;
     const upscaleTolerance = auditConfig.imageUpscaleTolerance;
     const imageData = await page.evaluate(({ blurThreshold, upscaleTolerance }) => {
@@ -121,13 +122,6 @@ export class ImageValidator {
         }
       };
 
-      const viewportWidth = document.documentElement.clientWidth;
-      const viewportHeight = window.innerHeight;
-      const visibleArea = (rect: DOMRect): number => {
-        const width = Math.max(0, Math.min(rect.right, viewportWidth) - Math.max(rect.left, 0));
-        const height = Math.max(0, Math.min(rect.bottom, viewportHeight) - Math.max(rect.top, 0));
-        return width * height;
-      };
       const hasFallbackContent = (image: HTMLImageElement): boolean => {
         const parent = image.parentElement;
         if (!parent) return false;
@@ -144,17 +138,21 @@ export class ImageValidator {
         const scaleY = image.naturalHeight > 0 ? rect.height / image.naturalHeight : 0;
         const upscaleRatio = Math.max(scaleX, scaleY);
         const sharpness = sharpnessFor(image);
-        const area = visibleArea(rect);
-        const visibleRatio = area / Math.max(1, rect.width * rect.height);
-        const visibleToUser =
+        let visibleToUser =
           rect.width >= 8 &&
           rect.height >= 8 &&
-          area >= 64 &&
-          visibleRatio >= 0.2 &&
           style.display !== 'none' &&
           style.visibility !== 'hidden' &&
-          Number(style.opacity) > 0.01 &&
           !Boolean(image.closest('[aria-hidden="true"],[hidden],template,script,style,[data-audit-ignore-visual]'));
+        let ancestor: HTMLElement | null = image;
+        while (visibleToUser && ancestor) {
+          const ancestorStyle = getComputedStyle(ancestor);
+          visibleToUser =
+            ancestorStyle.display !== 'none' &&
+            ancestorStyle.visibility !== 'hidden' &&
+            Number(ancestorStyle.opacity) > 0.01;
+          ancestor = ancestor.parentElement;
+        }
         const blurEligible =
           !isVector &&
           visibleToUser &&
@@ -180,8 +178,6 @@ export class ImageValidator {
           selector: selectorFor(image),
           visibleToUser,
           renderedSuccessfully: image.complete && image.naturalWidth > 0 && image.naturalHeight > 0,
-          visibleRatio: Number(visibleRatio.toFixed(3)),
-          visibleArea: Math.round(area),
           hasFallbackContent: hasFallbackContent(image),
           scaleX: Number(scaleX.toFixed(3)),
           scaleY: Number(scaleY.toFixed(3)),
@@ -388,33 +384,49 @@ export class ImageValidator {
       );
     }
 
+    await page.evaluate((scrollY) => window.scrollTo(0, scrollY), originalScrollY);
     return { issues, findings };
   }
 
-  private async waitForVisibleImageDecode(page: Page): Promise<void> {
-    await page.evaluate(async () => {
-      const viewportWidth = document.documentElement.clientWidth;
-      const viewportHeight = window.innerHeight;
-      const visibleImages = Array.from(document.images).filter((image) => {
+  private async loadLazyImages(page: Page): Promise<void> {
+    const originalScrollY = await page.evaluate(() => window.scrollY);
+    const imageIndexes = await page.evaluate(() =>
+      Array.from(document.images).flatMap((image, index) => {
         const rect = image.getBoundingClientRect();
-        const style = getComputedStyle(image);
-        const visibleWidth = Math.max(0, Math.min(rect.right, viewportWidth) - Math.max(rect.left, 0));
-        const visibleHeight = Math.max(0, Math.min(rect.bottom, viewportHeight) - Math.max(rect.top, 0));
-        return (
+        let visible =
           rect.width >= 8 &&
           rect.height >= 8 &&
-          visibleWidth * visibleHeight >= 64 &&
-          style.display !== 'none' &&
-          style.visibility !== 'hidden' &&
-          Number(style.opacity) > 0.01
-        );
-      });
-      await Promise.all(
-        visibleImages.map((image) =>
-          image.decode().catch(() => undefined)
-        )
-      );
-    }).catch(() => undefined);
+          !image.closest('[aria-hidden="true"],[hidden],template,script,style,[data-audit-ignore-visual]');
+        let ancestor: HTMLElement | null = image;
+        while (visible && ancestor) {
+          const style = getComputedStyle(ancestor);
+          visible =
+            style.display !== 'none' &&
+            style.visibility !== 'hidden' &&
+            Number(style.opacity) > 0.01;
+          ancestor = ancestor.parentElement;
+        }
+        return visible ? [index] : [];
+      })
+    );
+
+    try {
+      for (const index of imageIndexes) {
+        const image = page.locator('img').nth(index);
+        await image.scrollIntoViewIfNeeded({ timeout: 5_000 }).catch(() => undefined);
+        await page.waitForTimeout(100);
+        await image
+          .evaluate((element: HTMLImageElement) =>
+            Promise.race([
+              element.decode().catch(() => undefined),
+              new Promise<void>((resolve) => setTimeout(resolve, 1_000))
+            ])
+          )
+          .catch(() => undefined);
+      }
+    } finally {
+      await page.evaluate((scrollY) => window.scrollTo(0, scrollY), originalScrollY);
+    }
   }
 
   private async measureDownloadedSharpness(

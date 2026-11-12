@@ -939,6 +939,7 @@ export async function detectDomDefects(page: Page): Promise<DomDefect[]> {
         const controlRect = control.getBoundingClientRect();
         if (controlRect.width <= 1 || controlRect.height <= 1) continue;
         if (isFloatingUtility(control) || isDynamicUi(control)) continue;
+        if (control.closest('header,nav,[role="banner"],[role="navigation"]')) continue;
 
         let positionedLayer: HTMLElement | null = control;
         while (positionedLayer && !['fixed', 'sticky'].includes(getComputedStyle(positionedLayer).position)) {

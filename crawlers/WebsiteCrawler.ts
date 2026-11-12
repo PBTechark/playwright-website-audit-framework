@@ -1,9 +1,10 @@
-import { APIRequestContext, Browser, Page } from '@playwright/test';
+import { APIRequestContext, Browser, Page, Response } from '@playwright/test';
 import { XMLParser } from 'fast-xml-parser';
 import { auditConfig } from '../config/auditConfig';
 import { Logger } from '../utils/logger';
 import { AuditTarget, PageInventoryItem } from '../utils/types';
 import { isInternalNavigableUrl, normalizeUrl, uniqueUrls } from '../utils/urlUtils';
+import { detectAccessChallenge } from '../utils/accessChallenge';
 
 interface QueueItem {
   url: string;
@@ -87,8 +88,46 @@ export class WebsiteCrawler {
     item: QueueItem
   ): Promise<{ item: PageInventoryItem; links: string[] } | null> {
     try {
-      const response = await page.goto(item.url, { waitUntil: 'domcontentloaded', timeout: auditConfig.navigationTimeoutMs });
-      await page.waitForLoadState('networkidle', { timeout: 8_000 }).catch(() => undefined);
+      let finalNavigationResponse: Response | null = null;
+      const onResponse = (response: Response) => {
+        const request = response.request();
+        if (request.isNavigationRequest() && request.frame() === page.mainFrame()) {
+          finalNavigationResponse = response;
+        }
+      };
+      page.on('response', onResponse);
+      let response: Response | null = null;
+      try {
+        response = await page.goto(item.url, {
+          waitUntil: 'domcontentloaded',
+          timeout: auditConfig.navigationTimeoutMs
+        });
+        await page.waitForLoadState('networkidle', { timeout: 8_000 }).catch(() => undefined);
+      } finally {
+        page.off('response', onResponse);
+      }
+      response = finalNavigationResponse ?? response;
+
+      const accessChallenge = await detectAccessChallenge(page, response?.status());
+      if (accessChallenge) {
+        this.logger.warn(
+          `Access blocked by CAPTCHA while crawling ${item.url}; challenge page is ${accessChallenge.finalUrl}`
+        );
+        return {
+          item: {
+            targetName: this.target.name,
+            targetBaseUrl: this.baseUrl,
+            url: item.url,
+            title: accessChallenge.title || 'Access blocked by CAPTCHA challenge',
+            depth: item.depth,
+            source: item.source,
+            status: accessChallenge.status,
+            accessBlocked: 'captcha',
+            finalUrl: accessChallenge.finalUrl
+          },
+          links: []
+        };
+      }
 
       const finalUrl = normalizeUrl(page.url(), this.baseUrl);
       if (!finalUrl || !isInternalNavigableUrl(finalUrl, this.baseUrl)) {

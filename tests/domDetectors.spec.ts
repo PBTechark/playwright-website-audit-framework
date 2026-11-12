@@ -336,6 +336,59 @@ test('does not report a normal sticky header as footer obstruction', async ({ pa
   expect(defects.filter((item) => item.type === 'Footer Obstruction')).toHaveLength(0);
 });
 
+test('does not report fixed header links against a contentinfo wrapper that includes pre-footer content', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.setContent(`
+    <style>
+      body { margin:0; }
+      #header-outer { position:fixed; top:0; left:0; right:0; height:80px; z-index:10; background:white; }
+      main { height:600px; }
+      [role="contentinfo"] { height:900px; }
+      .before-footer { height:300px; }
+      footer { height:600px; }
+    </style>
+    <div id="header-outer">
+      <header><nav><a href="/about">About</a><a href="/contact">Contact</a></nav></header>
+    </div>
+    <main>Page content</main>
+    <div role="contentinfo">
+      <section class="before-footer"><h1>Questions? Connect with us.</h1></section>
+      <footer><a href="/privacy">Privacy</a></footer>
+    </div>
+  `);
+  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+
+  const defects = await detectDomDefects(page);
+
+  expect(defects.filter((item) => item.type === 'Footer Obstruction')).toHaveLength(0);
+});
+
+test('reports an independent fixed control that overlaps footer content', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.setContent(`
+    <style>
+      body { margin:0; }
+      main { height:600px; }
+      footer { position:relative; height:260px; }
+      footer a { position:absolute; left:20px; bottom:10px; width:160px; height:40px; }
+      #floating-control { position:fixed; left:20px; bottom:0; width:160px; height:50px; z-index:10; }
+    </style>
+    <main>Page content</main>
+    <footer><a id="footer-link" href="/privacy">Privacy</a></footer>
+    <button id="floating-control">Help</button>
+  `);
+  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+
+  const defects = await detectDomDefects(page);
+
+  expect(defects).toEqual(expect.arrayContaining([
+    expect.objectContaining({
+      type: 'Footer Obstruction',
+      selector: '#floating-control'
+    })
+  ]));
+});
+
 test('reports only partially visible content that is actually cut off', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.setContent(`

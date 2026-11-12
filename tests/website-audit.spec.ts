@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { request, TestInfo } from '@playwright/test';
+import { request, Response, TestInfo } from '@playwright/test';
 import { test, expect } from '../fixtures/audit-fixtures';
 import { DeploymentAudit } from '../audits/DeploymentAudit';
 import { PerformanceAudit } from '../audits/PerformanceAudit';
@@ -26,6 +26,8 @@ import { collectPerformanceMetrics } from '../utils/performanceMetrics';
 import { markNetworkNeverIdle } from '../utils/evidence';
 import { createIssue } from '../utils/issueFactory';
 import { isReportableIssue } from '../utils/reportFilters';
+import { detectAccessChallenge } from '../utils/accessChallenge';
+import { EvidenceManager } from '../utils/evidence';
 import {
   AuditCheck,
   AuditIssue,
@@ -79,13 +81,49 @@ test.describe('Automated website audit', () => {
       let metrics: PerformanceMetrics | undefined;
 
       try {
-        const response = await page
-          .goto(pageItem.url, {
+        let finalNavigationResponse: Response | null = null;
+        const onResponse = (navigationResponse: Response) => {
+          const navigationRequest = navigationResponse.request();
+          if (navigationRequest.isNavigationRequest() && navigationRequest.frame() === page.mainFrame()) {
+            finalNavigationResponse = navigationResponse;
+          }
+        };
+        page.on('response', onResponse);
+        let response: Response | null = null;
+        try {
+          response = await page.goto(pageItem.url, {
             waitUntil: 'domcontentloaded',
             timeout: auditConfig.navigationTimeoutMs
-          })
-          .catch(() => null);
-        await page.waitForLoadState('networkidle', { timeout: 10_000 }).catch(() => markNetworkNeverIdle(page));
+          }).catch(() => null);
+          await page.waitForLoadState('networkidle', { timeout: 10_000 }).catch(() => markNetworkNeverIdle(page));
+        } finally {
+          page.off('response', onResponse);
+        }
+        response = finalNavigationResponse ?? response;
+        const accessChallenge = await detectAccessChallenge(page, response?.status());
+        if (accessChallenge) {
+          const screenshot = await new EvidenceManager(page, pageItem.url, viewport, pageItem.targetName)
+            .captureAboveFold('access-challenge')
+            .catch(() => null);
+          if (screenshot) screenshots.push(screenshot);
+          issues.push(
+            createIssue({
+              category: 'Deployment',
+              targetName: pageItem.targetName,
+              targetBaseUrl: pageItem.targetBaseUrl,
+              url: pageItem.url,
+              viewport,
+              description: 'Page access is blocked by a CAPTCHA/security challenge.',
+              severity: 'High',
+              evidence: screenshot ? [screenshot.path] : undefined,
+              expected: 'The requested page loads and is available to the authorized audit runner.',
+              actual: `Navigation to ${pageItem.url} ended at ${accessChallenge.finalUrl} (HTTP ${accessChallenge.status ?? 'unknown'}; title "${accessChallenge.title}").`,
+              businessImpact: 'The audit cannot inspect the requested page until the site grants access to the audit runner.',
+              suggestedFix: 'Ask the site administrator to allowlist the authorized audit runner or provide an approved staging environment. The framework does not solve or bypass CAPTCHA challenges.',
+              details: accessChallenge
+            })
+          );
+        }
 
         const browserViewport = page.viewportSize();
         const runtimeScreen = await page.evaluate(() => ({
@@ -128,13 +166,13 @@ test.describe('Automated website audit', () => {
               details: { status: 0 }
             })
           );
-        } else if (response.status() >= 400) {
+        } else if (response.status() >= 400 && !accessChallenge) {
           issues.push(
             ...(await new DeploymentAudit().run(page, pageItem.url, viewport, response, pageItem.targetName))
           );
         }
 
-        if (response && response.status() < 400) {
+        if (response && response.status() < 400 && !accessChallenge) {
           const popupResult = await new PopupValidator().validate(
             page,
             pageItem.url,

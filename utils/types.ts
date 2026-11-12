@@ -49,6 +49,8 @@ export interface PageInventoryItem {
   source: string;
   status?: number;
   redirectedFrom?: string;
+  accessBlocked?: 'captcha';
+  finalUrl?: string;
 }
 
 export interface ScreenshotEvidence {
