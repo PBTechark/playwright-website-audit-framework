@@ -190,6 +190,72 @@ test.describe('Button validator evidence', () => {
     expect(issues.some((issue) => issue.selector?.includes('/home'))).toBe(false);
   });
 
+  test('does not classify a lazy content thumbnail or its alternative text as a missing or hidden icon label', async ({
+    page
+  }) => {
+    await page.setContent(`
+      <a class="cta-image-link" href="/articles/featured" aria-label="Read the featured article">
+        <img
+          class="post-thumbnail"
+          src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1' height='1'%3E%3C/svg%3E"
+          data-src="/images/featured-article.jpg"
+          width="650"
+          height="570"
+          alt="Featured article preview"
+        >
+      </a>
+    `);
+
+    const issues = await new ButtonValidator().validate(page, 'https://example.com/', 'Desktop Full HD');
+
+    expect(issues.filter((issue) =>
+      issue.description === 'Icon-only control has no rendered icon.' ||
+      issue.description.startsWith('Button text becomes unavailable on hover:')
+    )).toHaveLength(0);
+    expect(issues.some((issue) => issue.description === 'Button has no visible or accessible label.')).toBe(false);
+  });
+
+  test('does not report a pending lazy icon image as confirmed missing', async ({ page }) => {
+    await page.setContent(`
+      <a id="search" href="/search" aria-label="Search">
+        <img
+          class="icon-search"
+          src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1' height='1'%3E%3C/svg%3E"
+          data-src="/images/search.svg"
+          width="24"
+          height="24"
+          alt=""
+        >
+      </a>
+    `);
+
+    const issues = await new ButtonValidator().validate(page, 'https://example.com/', 'Desktop Full HD');
+
+    expect(issues.filter((issue) =>
+      issue.description === 'Icon-only control has no rendered icon.' ||
+      issue.description === 'Button has no visible or accessible label.'
+    )).toHaveLength(0);
+  });
+
+  test('does not accept an SVG icon hidden inside an otherwise visible control', async ({ page }) => {
+    await page.setContent(`
+      <style>
+        a { display: inline-flex; width: 48px; height: 48px; }
+      </style>
+      <a href="/search" aria-label="Search">
+        <svg style="display:none" width="24" height="24" viewBox="0 0 24 24">
+          <path d="M2 2h20v20H2z"></path>
+        </svg>
+      </a>
+    `);
+
+    const issues = await new ButtonValidator().validate(page, 'https://example.com/', 'Desktop Full HD');
+
+    expect(issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ description: 'Icon-only control has no rendered icon.' })
+    ]));
+  });
+
   test('uses the accessible-name rule for visible search and social icons', async ({ page }) => {
     await page.setContent(`
       <style>
@@ -345,6 +411,39 @@ test.describe('Button validator evidence', () => {
     expect(issues.filter((issue) => issue.description.includes('smaller than recommended'))).toHaveLength(0);
   });
 
+  test('accepts a desktop-hidden menu toggle when its containing navigation is visible and usable', async ({
+    page
+  }) => {
+    await page.setContent(`
+      <header>
+        <nav id="site-navigation" aria-label="Primary">
+          <button id="menu-toggle" type="button" aria-label="Open menu" style="display:none"></button>
+          <a href="/home">Home</a>
+          <a href="/about">About</a>
+        </nav>
+      </header>
+    `);
+
+    const url = 'https://example.com/';
+    const buttonIssues = await new ButtonValidator().validate(page, url, 'Desktop Full HD');
+    const componentAudit = await new ComponentAssertionAudit().run(
+      page,
+      url,
+      'Desktop Full HD',
+      { loadTimeMs: 0, domContentLoadedMs: 0, totalRequests: 0, totalResourceBytes: 0 },
+      new BrowserSignalCollector(),
+      []
+    );
+
+    expect(buttonIssues.filter((issue) => issue.description === 'Button is present but not visible.')).toHaveLength(0);
+    expect(componentAudit.checks).toEqual(
+      expect.arrayContaining([expect.objectContaining({ checkName: 'Button visibility', result: 'PASS' })])
+    );
+    expect(
+      componentAudit.issues.filter((issue) => issue.description === 'Button visibility: Button is not visible.')
+    ).toHaveLength(0);
+  });
+
   test('still reports hidden controls that target a visible non-navigation component', async ({ page }) => {
     const dialogId = `dialog-${Date.now()}-details`;
     await page.setContent(`
@@ -360,6 +459,91 @@ test.describe('Button validator evidence', () => {
         selector: expect.stringContaining('button')
       })
     ]));
+  });
+
+  test('does not exempt unrelated hidden controls merely because they share visible navigation', async ({ page }) => {
+    await page.setContent(`
+      <nav aria-label="Primary">
+        <button id="hidden-filter" type="button" aria-label="Open filters" style="display:none"></button>
+        <a href="/home">Home</a>
+      </nav>
+    `);
+
+    const issues = await new ButtonValidator().validate(page, 'https://example.com/', 'Desktop Full HD');
+
+    expect(issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          description: 'Button is present but not visible.',
+          selector: expect.stringContaining('Open')
+        })
+      ])
+    );
+  });
+
+  test('does not exempt a hidden non-navigation control that references a dialog inside a nav', async ({ page }) => {
+    await page.setContent(`
+      <header>
+        <nav aria-label="Primary">
+          <button type="button" aria-label="Open account panel" aria-controls="account-panel" style="display:none"></button>
+          <a href="/home">Home</a>
+        </nav>
+        <div id="account-panel" role="dialog">Account details</div>
+      </header>
+    `);
+
+    const issues = await new ButtonValidator().validate(page, 'https://example.com/', 'Desktop Full HD');
+    const componentAudit = await new ComponentAssertionAudit().run(
+      page,
+      'https://example.com/',
+      'Desktop Full HD',
+      { loadTimeMs: 0, domContentLoadedMs: 0, totalRequests: 0, totalResourceBytes: 0 },
+      new BrowserSignalCollector(),
+      []
+    );
+
+    expect(issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        description: 'Button is present but not visible.',
+        selector: expect.stringContaining('Open')
+      })
+    ]));
+    const componentVisibilityIssue = componentAudit.issues.find(
+      (issue) => issue.description === 'Button visibility: Button is not visible.'
+    );
+    expect(componentVisibilityIssue?.selector).toContain('button');
+  });
+
+  test('accepts a hidden social link in a collapsed header list when a visible menu toggle is available', async ({
+    page
+  }) => {
+    await page.setContent(`
+      <header>
+        <nav aria-label="Primary">
+          <a href="/home">Home</a>
+          <ul class="social-media-links" style="display:none">
+            <li><a href="/facebook" class="fa-facebook-f" aria-label="Facebook"></a></li>
+          </ul>
+        </nav>
+        <button type="button" class="mobile-menu" aria-label="Open menu">Menu</button>
+      </header>
+    `);
+
+    const url = 'https://example.com/';
+    const buttonIssues = await new ButtonValidator().validate(page, url, 'Mobile Portrait');
+    const componentAudit = await new ComponentAssertionAudit().run(
+      page,
+      url,
+      'Mobile Portrait',
+      { loadTimeMs: 0, domContentLoadedMs: 0, totalRequests: 0, totalResourceBytes: 0 },
+      new BrowserSignalCollector(),
+      []
+    );
+
+    expect(buttonIssues.filter((issue) => issue.description === 'Button is present but not visible.')).toHaveLength(0);
+    expect(componentAudit.issues.filter((issue) =>
+      issue.description === 'Menu link clickable: Menu link is hidden or cannot receive pointer interaction.'
+    )).toHaveLength(0);
   });
 
   test('does not call off-viewport logo and home links hidden and keeps each selector distinct', async ({ page }) => {

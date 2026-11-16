@@ -12,6 +12,27 @@ import { EvidenceManager } from '../utils/evidence';
 
 const SERVER_ERROR_ATTEMPTS = 3;
 const SERVER_ERROR_RETRY_DELAY_MS = 500;
+const FRAGMENT_CHECK_TIMEOUT_MS = 2_000;
+const FRAGMENT_SETTLE_MS = 100;
+
+type BrokenAnchorCandidate = {
+  hash: string;
+  href: string;
+  selector: string;
+  text: string;
+  isBackToTop: boolean;
+};
+
+type AnchorVerification = {
+  resolved: boolean;
+  clicked: boolean;
+  defaultPrevented: boolean;
+  targetAppeared: boolean;
+  targetVisible: boolean;
+  scrollBefore: number;
+  scrollAfter: number;
+  error?: string;
+};
 
 export class LinkValidator {
   constructor(
@@ -96,19 +117,38 @@ export class LinkValidator {
       }
     }
 
+    const originalPageUrl = page.url();
+    const originalScrollY = await page.evaluate(() => window.scrollY);
     const anchors = await this.findBrokenAnchors(page, url);
-    for (const anchor of anchors) {
+    for (const [index, anchor] of anchors.entries()) {
+      const verification = await this.verifySamePageAnchor(
+        page,
+        anchor,
+        originalPageUrl,
+        originalScrollY,
+        index
+      );
+      if (verification.resolved) continue;
+      const screenshot = await evidence.captureElementDiagnostic(
+        `broken-anchor-${index}`,
+        anchor.selector,
+        `Missing anchor target ${anchor.hash}`
+      );
       issues.push(
         createIssue({
           category: 'Links',
           url,
           viewport,
-          description: `Anchor target is missing: ${anchor}`,
+          selector: anchor.selector,
+          description: `Anchor target is missing: ${anchor.hash}`,
           severity: 'Medium',
           suggestedFix: 'Create the target element id or update the anchor link.',
-          details: { anchor }
+          details: { ...anchor, verification },
+          evidence: screenshot ? [screenshot.path] : [],
+          evidenceDetails: screenshot ? [screenshot] : []
         })
       );
+      await this.restorePageState(page, originalPageUrl, originalScrollY);
     }
 
     const placeholderCtas = await this.findPlaceholderCtaLinks(page);
@@ -289,33 +329,221 @@ export class LinkValidator {
     }
   }
 
-  private async findBrokenAnchors(page: Page, url: string): Promise<string[]> {
+  private async findBrokenAnchors(page: Page, url: string): Promise<BrokenAnchorCandidate[]> {
+    await page.waitForTimeout(100);
     return page.evaluate((pageUrl) => {
+      const selectorFor = (element: Element): string => {
+        const uniquelySelectsElement = (selector: string): boolean => {
+          try {
+            const matches = document.querySelectorAll(selector);
+            return matches.length === 1 && matches[0] === element;
+          } catch {
+            return false;
+          }
+        };
+        if (element.id) {
+          const candidate = `#${CSS.escape(element.id)}`;
+          if (uniquelySelectsElement(candidate)) return candidate;
+        }
+        const parts: string[] = [];
+        let node: Element | null = element;
+        while (node && node !== document.body) {
+          const siblings = node.parentElement
+            ? Array.from(node.parentElement.children).filter((item) => item.tagName === node!.tagName)
+            : [];
+          parts.unshift(`${node.tagName.toLowerCase()}:nth-of-type(${Math.max(1, siblings.indexOf(node) + 1)})`);
+          node = node.parentElement;
+          const candidate = `body > ${parts.join(' > ')}`;
+          if (node === document.body && uniquelySelectsElement(candidate)) return candidate;
+        }
+        return `body > ${parts.join(' > ')}`;
+      };
+      const exists = (id: string): boolean =>
+        Boolean(
+          document.getElementById(id) ||
+            Array.from(document.getElementsByName(id)).some((element) => element instanceof HTMLAnchorElement)
+        );
       return Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href^="#"], a[href*="#"]'))
-        .map((anchor) => {
+        .flatMap((anchor) => {
           try {
             const target = new URL(anchor.href, pageUrl);
-            if (target.href.split('#')[0] !== pageUrl.split('#')[0] || !target.hash) return null;
-            const id = decodeURIComponent(target.hash.slice(1));
-            if (
-              document.getElementById(id) ||
-              Array.from(document.getElementsByName(id)).some((element) => element instanceof HTMLAnchorElement)
+            if (target.origin !== new URL(pageUrl).origin ||
+              target.pathname !== new URL(pageUrl).pathname ||
+              target.search !== new URL(pageUrl).search ||
+              !target.hash
             ) {
-              return null;
+              return [];
             }
+            const id = decodeURIComponent(target.hash.slice(1));
+            if (!id || exists(id)) return [];
 
             const accordionTrigger = anchor.closest<HTMLElement>('[role="tab"], .ui-accordion-header');
             const controlledPanelId = accordionTrigger?.getAttribute('aria-controls');
             const hasControlledPanel =
               Boolean(accordionTrigger?.hasAttribute('aria-expanded')) &&
               Boolean(controlledPanelId && document.getElementById(controlledPanelId));
-            return hasControlledPanel ? null : target.hash;
+            if (hasControlledPanel) return [];
+
+            const identity = [
+              anchor.id,
+              anchor.className,
+              anchor.getAttribute('aria-label') ?? '',
+              anchor.getAttribute('title') ?? '',
+              anchor.textContent ?? ''
+            ].join(' ');
+            return [{
+              hash: target.hash,
+              href: target.href,
+              selector: selectorFor(anchor),
+              text: (anchor.innerText || anchor.textContent || anchor.getAttribute('aria-label') || '').trim(),
+              isBackToTop: /^(?:top|page-top|top-of-page)$/i.test(id) ||
+                /back[-_ ]?to[-_ ]?top|scroll[-_ ]?to[-_ ]?top|return[-_ ]?to[-_ ]?top/i.test(identity)
+            }];
           } catch {
-            return null;
+            return [];
           }
-        })
-        .filter((item): item is string => Boolean(item));
+        });
     }, url);
+  }
+
+  private async verifySamePageAnchor(
+    page: Page,
+    anchor: BrokenAnchorCandidate,
+    originalUrl: string,
+    originalScrollY: number,
+    index: number
+  ): Promise<AnchorVerification> {
+    const marker = `__auditFragmentDefaultPrevented${index}`;
+    let verification: AnchorVerification = {
+      resolved: false,
+      clicked: false,
+      defaultPrevented: false,
+      targetAppeared: false,
+      targetVisible: false,
+      scrollBefore: originalScrollY,
+      scrollAfter: originalScrollY
+    };
+
+    try {
+      if (anchor.isBackToTop) {
+        await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+        await page.waitForTimeout(FRAGMENT_SETTLE_MS);
+      }
+
+      const locator = page.locator(anchor.selector).first();
+      await locator.scrollIntoViewIfNeeded({ timeout: FRAGMENT_CHECK_TIMEOUT_MS });
+      if (!(await locator.isVisible())) {
+        return { ...verification, error: 'The same-document link remained hidden after scrolling it into view.' };
+      }
+      const beforeAction = await page.evaluate(() => ({ scrollY: window.scrollY, hash: window.location.hash }));
+      verification.scrollBefore = beforeAction.scrollY;
+      await page.evaluate(
+        ({ selector, markerName }) => {
+          const target = document.querySelector(selector);
+          if (!(target instanceof HTMLAnchorElement)) return;
+          const listener = (event: Event) => {
+            if (!(event.target instanceof Element) || event.target.closest('a') !== target) return;
+            window.setTimeout(() => {
+              document.documentElement.setAttribute(markerName, String(event.defaultPrevented));
+            }, 0);
+          };
+          window.addEventListener('click', listener, true);
+          Reflect.set(document.documentElement, markerName, listener);
+        },
+        { selector: anchor.selector, markerName: marker }
+      );
+      await locator.click({ timeout: FRAGMENT_CHECK_TIMEOUT_MS });
+      verification.clicked = true;
+      await page.waitForTimeout(FRAGMENT_SETTLE_MS);
+      const readOutcome = () => page.evaluate(
+        ({ hash, markerName }) => {
+          const id = decodeURIComponent(hash.replace(/^#/, ''));
+          const target =
+            document.getElementById(id) ||
+            Array.from(document.getElementsByName(id)).find((element) => element instanceof HTMLAnchorElement) ||
+            null;
+          const targetAppeared = Boolean(target);
+          const targetVisible = target
+            ? (() => {
+                const rect = target.getBoundingClientRect();
+                if (rect.width <= 0 || rect.height <= 0 ||
+                  rect.right <= 0 || rect.left >= window.innerWidth ||
+                  rect.bottom <= 0 || rect.top >= window.innerHeight
+                ) {
+                  return false;
+                }
+                let current: Element | null = target;
+                while (current) {
+                  const style = window.getComputedStyle(current);
+                  if (
+                    style.display === 'none' ||
+                    style.visibility === 'hidden' ||
+                    style.visibility === 'collapse' ||
+                    Number(style.opacity) <= 0.01
+                  ) {
+                    return false;
+                  }
+                  current = current.parentElement;
+                }
+                return true;
+              })()
+            : false;
+          return {
+            defaultPrevented: document.documentElement.getAttribute(markerName) === 'true',
+            targetAppeared,
+            targetVisible,
+            scrollAfter: window.scrollY,
+            hashAfter: window.location.hash
+          };
+        },
+        { hash: anchor.hash, markerName: marker }
+      );
+      const isResolved = (outcome: Awaited<ReturnType<typeof readOutcome>>): boolean =>
+        (outcome.targetAppeared &&
+          (outcome.targetVisible ||
+            Math.abs(outcome.scrollAfter - verification.scrollBefore) > 16 ||
+            outcome.hashAfter === anchor.hash)) ||
+        (anchor.isBackToTop && verification.scrollBefore > 4 && outcome.scrollAfter <= 4);
+      let outcome = await readOutcome();
+      const deadline = Date.now() + FRAGMENT_CHECK_TIMEOUT_MS;
+      while (!isResolved(outcome) && Date.now() < deadline) {
+        await page.waitForTimeout(Math.min(50, deadline - Date.now()));
+        outcome = await readOutcome();
+      }
+      verification = {
+        ...verification,
+        defaultPrevented: outcome.defaultPrevented,
+        targetAppeared: outcome.targetAppeared,
+        targetVisible: outcome.targetVisible,
+        scrollAfter: outcome.scrollAfter,
+        resolved: isResolved(outcome)
+      };
+    } catch (error) {
+      verification.error = error instanceof Error ? error.message : String(error);
+    } finally {
+      await page.evaluate((markerName) => {
+        const listener = Reflect.get(document.documentElement, markerName);
+        if (typeof listener === 'function') window.removeEventListener('click', listener, true);
+        Reflect.deleteProperty(document.documentElement, markerName);
+        document.documentElement.removeAttribute(markerName);
+      }, marker);
+      await this.restorePageState(page, originalUrl, originalScrollY);
+    }
+
+    return verification;
+  }
+
+  private async restorePageState(page: Page, originalUrl: string, originalScrollY: number): Promise<void> {
+    await page.evaluate(
+      ({ url, scrollY }) => {
+        const original = new URL(url, window.location.href);
+        if (original.origin === window.location.origin && original.href !== window.location.href) {
+          window.history.replaceState(window.history.state, '', original.href);
+        }
+        window.scrollTo(0, scrollY);
+      },
+      { url: originalUrl, scrollY: originalScrollY }
+    );
   }
 
   private async findPlaceholderCtaLinks(page: Page): Promise<

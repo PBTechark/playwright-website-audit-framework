@@ -270,9 +270,6 @@ test.describe('Automated website audit', () => {
             ...(await new SecurityAudit().run(page, pageItem.url, viewport, response ?? undefined))
           );
           issues.push(...(await new FormValidator().validate(page, pageItem.url, viewport)));
-          issues.push(
-            ...(await new ButtonValidator().validate(page, pageItem.url, viewport, pageItem.targetName))
-          );
 
           if (viewport === 'Desktop Full HD') {
             const searchFilterResult = await new SearchFilterAudit().run(
@@ -302,6 +299,9 @@ test.describe('Automated website audit', () => {
             pageItem.url,
             viewport,
             pageItem.targetName
+          );
+          issues.push(
+            ...(await new ButtonValidator().validate(page, pageItem.url, viewport, pageItem.targetName))
           );
           const videoResult = await new VideoValidator(api).validate(
             page,

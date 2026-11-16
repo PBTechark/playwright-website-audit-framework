@@ -3,6 +3,7 @@ import { Page } from '@playwright/test';
 import { BrowserSignalCollector } from '../utils/browserSignals';
 import { recordAssertion } from '../utils/assertionFactory';
 import { EvidenceManager } from '../utils/evidence';
+import { hasUsableVisibleNavigation } from '../utils/responsiveNavigation';
 import { AuditCheck, AuditIssue, PerformanceMetrics, Severity } from '../utils/types';
 
 type RawCheck = {
@@ -189,6 +190,19 @@ export class ComponentAssertionAudit {
       add('Footer','Footer visibility',Boolean(footer && visible(footer)),'Medium','A visible footer',footer ? `visible=${visible(footer)}` : 'No footer found','Footer is visible.','Footer is missing or hidden.','Provide a visible contentinfo/footer region.',footer ?? undefined);
       return out;
     }, buttonNameFailures);
+
+    for (const item of raw) {
+      if (
+        ((item.component === 'Button' && item.checkName === 'Button visibility') ||
+          (item.component === 'Navigation' && item.checkName === 'Menu link clickable')) &&
+        !item.passed &&
+        item.selector &&
+        (await page.evaluate(hasUsableVisibleNavigation, item.selector))
+      ) {
+        item.passed = true;
+        item.actual = 'The control is hidden, but equivalent navigation is visible and usable.';
+      }
+    }
 
     raw.push(...this.performanceChecks(metrics, signals));
     const checks: AuditCheck[] = []; const issues: AuditIssue[] = [];

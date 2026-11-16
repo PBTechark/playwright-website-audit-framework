@@ -1,11 +1,13 @@
 import { Page } from '@playwright/test';
 import { EvidenceManager } from '../utils/evidence';
 import { createIssue } from '../utils/issueFactory';
+import { hasUsableVisibleNavigation } from '../utils/responsiveNavigation';
 import { AuditIssue, ScreenshotEvidence } from '../utils/types';
 
 type ButtonSnapshot = {
   selector: string;
   text: string;
+  visibleText: string;
   visible: boolean;
   expectedResponsiveHidden: boolean;
   backToTop: boolean;
@@ -108,61 +110,6 @@ export class ButtonValidator {
         }
         return true;
       };
-      const hasVisibleControlledNavigation = (element: HTMLElement): boolean => {
-        if (isVisible(element)) return false;
-        const targets = new Set<Element>();
-        const controlledIds = element.getAttribute('aria-controls')?.trim().split(/\s+/) ?? [];
-        for (const id of controlledIds) {
-          const target = document.getElementById(id);
-          if (target) targets.add(target);
-        }
-
-        for (const attribute of ['data-target', 'data-bs-target']) {
-          const selector = element.getAttribute(attribute)?.trim();
-          if (!selector) continue;
-          try {
-            document.querySelectorAll(selector).forEach((target) => targets.add(target));
-          } catch {
-            // Invalid site-provided selector attributes are ignored; other reference types still apply.
-          }
-        }
-
-        const href = element.getAttribute('href')?.trim();
-        if (href?.includes('#')) {
-          try {
-            const destination = new URL(href, document.baseURI);
-            if (
-              destination.origin === window.location.origin &&
-              destination.pathname === window.location.pathname &&
-              destination.search === window.location.search &&
-              destination.hash.length > 1
-            ) {
-              const target = document.getElementById(decodeURIComponent(destination.hash.slice(1)));
-              if (target) targets.add(target);
-            }
-          } catch {
-            // Malformed href values cannot identify an in-document controlled region.
-          }
-        }
-
-        return Array.from(targets).some((target) => {
-          if (target === element || !(target instanceof HTMLElement)) return false;
-          const rect = target.getBoundingClientRect();
-          if (rect.width <= 1 || rect.height <= 1) return false;
-          let current: HTMLElement | null = target;
-          while (current && current !== document.documentElement) {
-            const style = window.getComputedStyle(current);
-            if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) <= 0.01) {
-              return false;
-            }
-            current = current.parentElement;
-          }
-          return target.matches('nav,[role="navigation"]') ||
-            Boolean(target.querySelector('nav,[role="navigation"]')) ||
-            (target.matches('[class*="navbar-collapse" i],[class*="nav-menu" i]') &&
-              Boolean(target.querySelector('a[href],button,[role="link"]')));
-        });
-      };
       const looksLikeCta = (element: HTMLElement): boolean => {
         const rect = element.getBoundingClientRect();
         const style = window.getComputedStyle(element);
@@ -226,10 +173,60 @@ export class ButtonValidator {
             (fontFace) => fontFace.family.replace(/^['"]|['"]$/g, '').toLowerCase() === fontFamily.toLowerCase()
           );
           const failedFont = fontFaces.length > 0 && fontFaces.every((fontFace) => fontFace.status === 'error');
-          const image = icon instanceof HTMLImageElement ? icon : icon.querySelector('img');
-          const imageLoaded = image ? image.complete && image.naturalWidth > 0 : undefined;
-          const svg = icon instanceof SVGElement ? icon : icon.querySelector('svg');
-          const svgHasGraphic = svg ? Boolean(svg.querySelector('path,use,circle,rect,polygon,line,polyline')) : undefined;
+          const image = icon instanceof HTMLImageElement ? icon : undefined;
+          const lazySource = image
+            ? image.getAttribute('data-src') ||
+              image.getAttribute('data-lazy-src') ||
+              image.getAttribute('data-original') ||
+              image.getAttribute('data-srcset')
+            : undefined;
+          const imagePending = Boolean(
+            image &&
+              lazySource &&
+              image.getAttribute('src') !== lazySource &&
+              image.currentSrc !== lazySource
+          );
+          const imageLoaded = image ? !imagePending && image.complete && image.naturalWidth > 0 : undefined;
+          const svg = icon instanceof SVGElement ? icon : undefined;
+          const svgGraphics = svg
+            ? Array.from(svg.querySelectorAll<SVGGraphicsElement>('path,use,circle,rect,polygon,line,polyline,text,image'))
+            : [];
+          const svgHasGraphic = svg
+            ? (() => {
+                const svgRect = svg.getBoundingClientRect();
+                let current: Element | null = svg;
+                while (current) {
+                  const currentStyle = window.getComputedStyle(current);
+                  if (
+                    currentStyle.display === 'none' ||
+                    currentStyle.visibility === 'hidden' ||
+                    currentStyle.visibility === 'collapse' ||
+                    Number(currentStyle.opacity) <= 0.01
+                  ) {
+                    return false;
+                  }
+                  current = current.parentElement;
+                }
+                if (svgRect.width <= 0 || svgRect.height <= 0) return false;
+                return svgGraphics.some((graphic) => {
+                  const graphicStyle = window.getComputedStyle(graphic);
+                  if (
+                    graphicStyle.display === 'none' ||
+                    graphicStyle.visibility === 'hidden' ||
+                    graphicStyle.visibility === 'collapse' ||
+                    Number(graphicStyle.opacity) <= 0.01
+                  ) {
+                    return false;
+                  }
+                  try {
+                    const bounds = graphic.getBBox();
+                    return bounds.width > 0 || bounds.height > 0;
+                  } catch {
+                    return false;
+                  }
+                });
+              })()
+            : undefined;
           const hasBackground =
             rect.width > 0 &&
             rect.height > 0 &&
@@ -273,6 +270,8 @@ export class ButtonValidator {
             fontStatus: fontFaces.map((fontFace) => fontFace.status),
             failedFont,
             imageLoaded,
+            imagePending,
+            svgGraphicPresent: svgGraphics.length > 0,
             svgHasGraphic,
             hasBackground,
             hasVisibleGlyph
@@ -282,18 +281,23 @@ export class ButtonValidator {
           /(^|\s)fa-[\w-]+/.test(typeof icon.className === 'string' ? icon.className : icon.getAttribute('class') ?? '')
         ) || /(^|\s)fa-[\w-]+/.test(typeof element.className === 'string' ? element.className : '');
         const failedFont = observations.some((observation) => observation.failedFont);
+        const hiddenSvgGraphic = observations.some(
+          (observation) => observation.svgGraphicPresent && !observation.svgHasGraphic
+        );
         const rendered = observations.some((observation) =>
           observation.hasVisibleGlyph ||
           observation.imageLoaded === true ||
           observation.svgHasGraphic === true ||
           observation.hasBackground
         );
-        const hasBrokenImage = observations.some((observation) => observation.imageLoaded === false);
+        const hasBrokenImage = observations.some(
+          (observation) => observation.imageLoaded === false && !observation.imagePending
+        );
         const state: ButtonSnapshot['iconState'] = rendered
           ? 'rendered'
           : failedFont
             ? 'font-failed'
-            : hasBrokenImage || hasFontIconClass
+            : hasBrokenImage || hasFontIconClass || hiddenSvgGraphic
               ? 'missing'
               : 'unknown';
         return {
@@ -312,6 +316,26 @@ export class ButtonValidator {
           element.getAttribute('title') ?? ''
         ].join(' ');
         return /back[-_ ]?to[-_ ]?top|scroll[-_ ]?to[-_ ]?top|return[-_ ]?to[-_ ]?top/i.test(identity);
+      };
+      const iconElementsFor = (button: HTMLElement): HTMLElement[] => {
+        const imageIcons = Array.from(button.querySelectorAll<HTMLImageElement>('img')).filter((image) => {
+          const rect = image.getBoundingClientRect();
+          const classText = `${image.className} ${image.id} ${image.parentElement?.className ?? ''}`;
+          if (/thumbnail|featured|product|gallery|card-image|post-image/i.test(classText)) return false;
+          if (/(^|[\s_-])(?:icon|logo)(?:$|[\s_-])|fa-[\w-]+/i.test(classText)) return true;
+          return (
+            rect.width <= 96 &&
+            rect.height <= 96 &&
+            rect.width > 0 &&
+            rect.height > 0 &&
+            rect.width / rect.height >= 0.5 &&
+            rect.width / rect.height <= 2
+          );
+        });
+        const elements = Array.from(
+          button.querySelectorAll<HTMLElement>('i,svg,[class*="icon" i],[class*="fa-" i]')
+        );
+        return Array.from(new Set([...elements, ...imageIcons]));
       };
       return Array.from(document.querySelectorAll<HTMLElement>([
         'button',
@@ -337,9 +361,7 @@ export class ButtonValidator {
         ].join(',')))
         .filter((button) => {
           const backToTop = isBackToTop(button);
-          const iconElements = Array.from(button.querySelectorAll<HTMLElement>(
-            'i,svg,img,[class*="icon" i],[class*="fa-" i]'
-          ));
+          const iconElements = iconElementsFor(button);
           const selfIsIcon = /(^|\s)(fa-[\w-]+|icon[\w-]*)/i.test(
             typeof button.className === 'string' ? button.className : ''
           );
@@ -352,9 +374,7 @@ export class ButtonValidator {
           const rect = button.getBoundingClientRect();
           const style = window.getComputedStyle(button);
           const backToTop = isBackToTop(button);
-          const iconElements = Array.from(button.querySelectorAll<HTMLElement>(
-            'i,svg,img,[class*="icon" i],[class*="fa-" i]'
-          ));
+          const iconElements = iconElementsFor(button);
           if (/(\bfa-[\w-]+|\bicon[\w-]*)/i.test(typeof button.className === 'string' ? button.className : '')) {
             iconElements.unshift(button);
           }
@@ -367,8 +387,9 @@ export class ButtonValidator {
           return {
             selector: selectorFor(button),
             text: getAccessibleName(button),
+            visibleText: (button.innerText || '').trim(),
             visible: isVisible(button),
-            expectedResponsiveHidden: hasVisibleControlledNavigation(button),
+            expectedResponsiveHidden: false,
             backToTop,
             iconControl,
             ...iconInspection,
@@ -389,6 +410,13 @@ export class ButtonValidator {
           };
         });
     });
+    await Promise.all(
+      buttons
+        .filter((button) => !button.visible)
+        .map(async (button) => {
+          button.expectedResponsiveHidden = await page.evaluate(hasUsableVisibleNavigation, button.selector);
+        })
+    );
     const issues: AuditIssue[] = [];
     const evidenceManager = new EvidenceManager(page, url, viewport, targetName);
     for (const [index, button] of buttons.entries()) {
@@ -509,7 +537,7 @@ export class ButtonValidator {
         );
       }
 
-      if (button.visible && !button.disabled && button.text) {
+      if (button.visible && !button.disabled && button.visibleText) {
         const hover = await this.inspectHoverState(page, button.selector).catch(() => null);
         if (hover?.reason) {
           const shot = await captureIssueEvidence();
@@ -522,8 +550,8 @@ export class ButtonValidator {
               viewport,
               selector: button.selector,
               description: hover.reason.startsWith('Hover-state text contrast')
-                ? `Hover-state text contrast is insufficient: ${button.text}.`
-                : `Button text becomes unavailable on hover: ${button.text}.`,
+                ? `Hover-state text contrast is insufficient: ${button.visibleText}.`
+                : `Button text becomes unavailable on hover: ${button.visibleText}.`,
               severity: hover.reason.startsWith('Hover-state text contrast') ? 'Medium' : 'Suggestion',
               expected: 'Hover-state text meets the WCAG AA contrast requirement and remains visible.',
               actual: hover.reason,

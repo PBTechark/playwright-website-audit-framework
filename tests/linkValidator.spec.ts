@@ -111,6 +111,118 @@ test('does not report accordion fragment links with a valid controlled panel as 
   }
 });
 
+test('accepts working same-page top and dynamic links, reports a missing target, and restores page state', async ({
+  page
+}) => {
+  await withIsolatedLinkCache(async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { 'content-type': 'text/html' });
+      response.end(`
+        <style>
+          html { scroll-behavior: auto; }
+          body { min-height: 2400px; margin: 0; }
+          #totop { position: fixed; right: 12px; bottom: 12px; width: 48px; height: 48px; }
+        </style>
+        <main>
+          <a id="totop" href="#top" aria-label="Back to top">Top</a>
+          <a id="dynamic-link" href="#dynamic-target">Dynamic target</a>
+          <a id="missing-link" href="#missing-target">Missing target</a>
+        </main>
+        <script>
+          document.querySelector('#totop').addEventListener('click', (event) => {
+            event.preventDefault();
+            window.scrollTo(0, 0);
+          });
+          document.querySelector('#dynamic-link').addEventListener('click', (event) => {
+            event.preventDefault();
+            const target = document.createElement('div');
+            target.id = 'dynamic-target';
+            target.textContent = 'Loaded after activation';
+            document.body.append(target);
+            target.scrollIntoView();
+          });
+        </script>
+      `);
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', resolve);
+    });
+    const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
+    const api = await request.newContext({ ignoreHTTPSErrors: true });
+
+    try {
+      await page.goto(origin);
+      await page.evaluate(() => window.scrollTo(0, 80));
+      const initialUrl = page.url();
+      const result = await new LinkValidator(api, origin).validate(page, initialUrl, 'Desktop');
+      const anchorIssues = result.issues.filter((issue) =>
+        issue.description.startsWith('Anchor target is missing:')
+      );
+
+      expect(anchorIssues).toHaveLength(1);
+      expect(anchorIssues[0]).toMatchObject({
+        description: 'Anchor target is missing: #missing-target',
+        selector: '#missing-link',
+        viewport: 'Desktop',
+        evidenceDetails: [expect.objectContaining({ label: 'broken-anchor-2', annotated: true })]
+      });
+      expect(anchorIssues[0].evidence?.[0]).toBe(anchorIssues[0].evidenceDetails?.[0].path);
+      expect(await page.locator('#dynamic-target').count()).toBe(1);
+      expect(page.url()).toBe(initialUrl);
+      expect(await page.evaluate(() => window.scrollY)).toBe(80);
+    } finally {
+      await api.dispose();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+});
+
+test('waits for a fragment target created asynchronously by its link handler', async ({ page }) => {
+  await withIsolatedLinkCache(async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { 'content-type': 'text/html' });
+      response.end(`
+        <a id="delayed-link" href="#delayed-target">Load the delayed section</a>
+        <script>
+          document.querySelector('#delayed-link').addEventListener('click', (event) => {
+            event.preventDefault();
+            setTimeout(() => {
+              const target = document.createElement('section');
+              target.id = 'delayed-target';
+              target.textContent = 'Loaded after a delay';
+              document.body.append(target);
+              target.scrollIntoView();
+            }, 350);
+          });
+        </script>
+      `);
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', resolve);
+    });
+    const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
+    const api = await request.newContext({ ignoreHTTPSErrors: true });
+
+    try {
+      await page.goto(origin);
+      const result = await new LinkValidator(api, origin).validate(page, page.url(), 'Desktop');
+      expect(result.issues.filter((issue) =>
+        issue.description === 'Anchor target is missing: #delayed-target'
+      )).toHaveLength(0);
+      expect(await page.locator('#delayed-target').count()).toBe(1);
+    } finally {
+      await api.dispose();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+});
+
 test('reports a header logo that resolves to another hostname and includes its redirect chain', async ({
   page
 }) => {
