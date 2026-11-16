@@ -359,3 +359,5 @@ docker run --rm --cpus=2 --memory=4g --memory-swap=6g --shm-size=1g --env-file .
 The framework records findings rather than failing the entire audit on every issue. A page returning a server error fails its Playwright test because it prevents meaningful auditing. All other findings are reported with severity and suggested fixes.
 
 Set `AUDIT_FAIL_ON_SEVERITY` to `Medium`, `High`, or `Critical` to fail the final audit when a finding at that severity or higher is present. Set it to `Off` to report findings without failing teardown. The legacy `AUDIT_FAIL_ON_HIGH_SEVERITY=true` setting remains supported and is treated as a `High` threshold when the new setting is absent.
+
+Button targets smaller than the recommended touch size and button text that becomes unavailable on hover are reported as **Suggestions**, not bugs. Suggestions remain visible and filterable in the reports, but are excluded from bug totals, severity counts, health-score penalties, and quality-gate failures.

@@ -1,5 +1,5 @@
 import { ReactNode } from 'react';
-import type { AuditStatus, AuditSummary, Severity } from '../lib/api';
+import type { AuditStatus, AuditSummary, BugSeverity, Severity } from '../lib/api';
 
 const statusStyles: Record<AuditStatus, { label: string; className: string }> = {
   running: { label: 'Running', className: 'bg-accent-soft text-accent-ink' },
@@ -19,23 +19,25 @@ export function StatusBadge({ status }: { status: AuditStatus }) {
   );
 }
 
-export const SEVERITIES: Severity[] = ['Critical', 'High', 'Medium', 'Low'];
+export const SEVERITIES: BugSeverity[] = ['Critical', 'High', 'Medium', 'Low'];
+export const FINDING_CLASSIFICATIONS: Severity[] = [...SEVERITIES, 'Suggestion'];
 
 export const severityColor: Record<Severity, string> = {
   Critical: 'bg-severity-critical',
   High: 'bg-severity-high',
   Medium: 'bg-severity-medium',
-  Low: 'bg-severity-low'
+  Low: 'bg-severity-low',
+  Suggestion: 'bg-sunken ring-1 ring-inset ring-line-strong'
 };
 
-export const severityCountKey: Record<Severity, 'critical' | 'high' | 'medium' | 'low'> = {
+export const severityCountKey: Record<BugSeverity, 'critical' | 'high' | 'medium' | 'low'> = {
   Critical: 'critical',
   High: 'high',
   Medium: 'medium',
   Low: 'low'
 };
 
-const severityIcon: Record<Severity, string> = { Critical: '!!', High: '!', Medium: '•', Low: 'i' };
+const severityIcon: Record<Severity, string> = { Critical: '!!', High: '!', Medium: '•', Low: 'i', Suggestion: 'S' };
 
 /** The coloured square used everywhere a severity appears; it carries an icon so colour is never the only cue. */
 export function SeverityMark({ severity }: { severity: Severity }) {

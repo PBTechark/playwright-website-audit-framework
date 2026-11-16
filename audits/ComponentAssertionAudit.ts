@@ -1,6 +1,8 @@
+import AxeBuilder from '@axe-core/playwright';
 import { Page } from '@playwright/test';
 import { BrowserSignalCollector } from '../utils/browserSignals';
 import { recordAssertion } from '../utils/assertionFactory';
+import { EvidenceManager } from '../utils/evidence';
 import { AuditCheck, AuditIssue, PerformanceMetrics, Severity } from '../utils/types';
 
 type RawCheck = {
@@ -18,9 +20,19 @@ export class ComponentAssertionAudit {
     viewport: string,
     metrics: PerformanceMetrics,
     signals: BrowserSignalCollector,
-    evidence: string[]
+    evidence: string[],
+    targetName = 'default'
   ): Promise<{ checks: AuditCheck[]; issues: AuditIssue[] }> {
-    const raw = await page.evaluate(() => {
+    const axeResults = await new AxeBuilder({ page }).withRules(['button-name']).analyze();
+    const buttonNameFailures = axeResults.violations
+      .filter((violation) => violation.id === 'button-name')
+      .flatMap((violation) =>
+        violation.nodes.flatMap((node) => {
+          const selector = node.target.find((target): target is string => typeof target === 'string');
+          return selector ? [{ selector, reason: node.failureSummary ?? violation.help }] : [];
+        })
+      );
+    const raw = await page.evaluate((nameFailures) => {
       type R = RawCheck;
       const out: R[] = [];
       const visible = (el: HTMLElement) => {
@@ -145,10 +157,30 @@ export class ComponentAssertionAudit {
 
       for (const button of Array.from(document.querySelectorAll<HTMLElement>('button,[role="button"],input[type="button"],input[type="submit"]')).filter((item) => !ignoredOverlay(item)).slice(0, 150)) {
         const disabled = button.hasAttribute('disabled') || button.getAttribute('aria-disabled') === 'true';
-        const name = (button.innerText || button.getAttribute('aria-label') || (button as HTMLInputElement).value || '').trim();
         add('Button','Button visibility',visible(button),'High','A visible button',`visible=${visible(button)}`,'Button is visible.','Button is not visible.','Correct CSS visibility or remove the hidden control.',button);
         add('Button','Button enabled',!disabled,'Medium','An enabled button',`disabled=${disabled}`,'Button is enabled.','Button is disabled.','Enable the button when its action is available.',button);
-        add('Button','Button accessible name',name.length > 0,'Medium','Non-empty visible or accessible text',`name=${name || '(empty)'}`,'Button has a meaningful name.','Button has no text or accessible name.','Add visible text or aria-label.',button);
+        if (visible(button)) {
+          const nameFailure = nameFailures.find((failure) => {
+            try {
+              const matches = document.querySelectorAll(failure.selector);
+              return matches.length === 1 && matches[0] === button;
+            } catch {
+              return false;
+            }
+          });
+          add(
+            'Button',
+            'Button accessible name',
+            !nameFailure,
+            'Medium',
+            'A meaningful accessible name recognized by axe-core',
+            nameFailure ? `axe-core button-name rule failed: ${nameFailure.reason}` : 'axe-core button-name rule passed.',
+            'Button has a meaningful accessible name.',
+            'Button does not expose a usable accessible name.',
+            'Provide visible text, an aria-label, or an aria-labelledby reference to meaningful text.',
+            button
+          );
+        }
       }
 
       const overflow = visibleOverflowElement();
@@ -156,12 +188,29 @@ export class ComponentAssertionAudit {
       const footer = document.querySelector<HTMLElement>('footer,[role="contentinfo"]');
       add('Footer','Footer visibility',Boolean(footer && visible(footer)),'Medium','A visible footer',footer ? `visible=${visible(footer)}` : 'No footer found','Footer is visible.','Footer is missing or hidden.','Provide a visible contentinfo/footer region.',footer ?? undefined);
       return out;
-    });
+    }, buttonNameFailures);
 
     raw.push(...this.performanceChecks(metrics, signals));
     const checks: AuditCheck[] = []; const issues: AuditIssue[] = [];
-    for (const item of raw) {
-      const recorded = recordAssertion({ ...item, url, viewport, evidence: item.passed ? undefined : evidence,
+    const evidenceManager = new EvidenceManager(page, url, viewport, targetName);
+    for (const [index, item] of raw.entries()) {
+      let issueEvidence: string[] | undefined;
+      let issueEvidenceDetails: AuditIssue['evidenceDetails'];
+      if (!item.passed) {
+        if (item.selector) {
+          const diagnostic = await evidenceManager.captureElementDiagnostic(
+            `component-${index}-${item.checkName}`,
+            item.selector,
+            `${item.component}: ${item.checkName}`
+          );
+          issueEvidence = diagnostic ? [diagnostic.path] : undefined;
+          issueEvidenceDetails = diagnostic ? [diagnostic] : undefined;
+        } else if (evidence[0]) {
+          issueEvidence = [evidence[0]];
+        }
+      }
+      const recorded = recordAssertion({ ...item, url, viewport, evidence: item.passed ? undefined : issueEvidence,
+        evidenceDetails: item.passed ? undefined : issueEvidenceDetails,
         consoleLogs: item.component === 'Performance' ? signals.consoleFindings.map(x => `${x.type}: ${x.text}`).slice(0, 25) : undefined });
       checks.push(recorded.check); if (recorded.issue) issues.push(recorded.issue);
     }

@@ -10,6 +10,9 @@ import { isInternalNavigableUrl, normalizeUrl, uniqueUrls } from '../utils/urlUt
 import { mapWithConcurrency } from '../utils/concurrency';
 import { EvidenceManager } from '../utils/evidence';
 
+const SERVER_ERROR_ATTEMPTS = 3;
+const SERVER_ERROR_RETRY_DELAY_MS = 500;
+
 export class LinkValidator {
   constructor(
     private readonly request: APIRequestContext,
@@ -157,14 +160,14 @@ export class LinkValidator {
       `${crypto.createHash('sha1').update(destinationUrl).digest('hex')}.json`
     );
     const cached = readJsonFile<LinkFinding | null>(cachePath, null);
-    if (cached) {
+    if (cached && (cached.statusCode === undefined || cached.statusCode < 500)) {
       const reused: LinkFinding = { ...cached, sourceUrl };
       if (isLogo) reused.linkType = 'logo';
       else delete reused.linkType;
       return reused;
     }
     const finding = await this.fetchLink(sourceUrl, destinationUrl, isLogo);
-    if (finding.statusCode !== undefined) {
+    if (finding.statusCode !== undefined && finding.statusCode < 500) {
       // Write then rename, so a worker reading at the same moment never sees a partial file.
       fs.writeFileSync(`${cachePath}.${process.pid}`, JSON.stringify(finding), 'utf-8');
       fs.renameSync(`${cachePath}.${process.pid}`, cachePath);
@@ -190,11 +193,19 @@ export class LinkValidator {
         }
         visited.add(currentUrl);
 
-        const response = await this.request.get(currentUrl, {
+        let response = await this.request.get(currentUrl, {
           maxRedirects: 0,
           timeout: 15_000,
           failOnStatusCode: false
         });
+        for (let attempt = 1; response.status() >= 500 && attempt < SERVER_ERROR_ATTEMPTS; attempt += 1) {
+          await new Promise((resolve) => setTimeout(resolve, SERVER_ERROR_RETRY_DELAY_MS * attempt));
+          response = await this.request.get(currentUrl, {
+            maxRedirects: 0,
+            timeout: 15_000,
+            failOnStatusCode: false
+          });
+        }
         const location = response.headers()['location'];
         if (response.status() >= 300 && response.status() < 400 && location) {
           const nextUrl = new URL(location, currentUrl).toString();

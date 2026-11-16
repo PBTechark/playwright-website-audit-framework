@@ -235,6 +235,7 @@ export class HtmlReportGenerator {
       highIssues: summary.highIssues,
       mediumIssues: summary.mediumIssues,
       lowIssues: summary.lowIssues,
+      suggestions: summary.suggestions,
       healthScore: summary.healthScore
     });
     const retained = history.slice(-auditConfig.historyRetention);
@@ -268,7 +269,7 @@ export class HtmlReportGenerator {
   private chartTable(summary: Record<string, number | string>): string {
     return `${this.escape(summary.totalIssues ?? 0)} in total: ${['criticalIssues', 'highIssues', 'mediumIssues', 'lowIssues']
       .map((key) => `${this.escape(summary[key] ?? 0)} ${this.escape(this.label(key).replace(/ issues$/, ''))}`)
-      .join(', ')}.`;
+      .join(', ')}. ${this.escape(summary.suggestions ?? 0)} suggestions are listed separately.`;
   }
 
   private pageRows(results: AuditResult[]): string {
@@ -280,12 +281,15 @@ export class HtmlReportGenerator {
       pages.set(result.page.url, current);
     }
     return Array.from(pages.entries()).map(([url, page]) => {
-      const highest = page.issues.reduce<AuditIssue['severity'] | 'Pass'>((current, issue) => {
-        const rank = { Critical: 0, High: 1, Medium: 2, Low: 3 } as Record<AuditIssue['severity'], number>;
-        return current === 'Pass' || (issue.severity !== 'Low' && rank[issue.severity] < rank[current as AuditIssue['severity']]) ? issue.severity : current;
-      }, 'Pass');
+      const bugIssues = page.issues.filter((issue) => issue.severity !== 'Suggestion');
+      const highest = bugIssues.length
+        ? bugIssues.reduce<AuditIssue['severity']>((current, issue) => {
+            const rank = { Critical: 0, High: 1, Medium: 2, Low: 3 };
+            return rank[issue.severity as keyof typeof rank] < rank[current as keyof typeof rank] ? issue.severity : current;
+          }, 'Low')
+        : page.issues.length ? 'Suggestion' : 'Pass';
       return `<button type="button" class="page-card" data-filter-page="${this.escapeAttr(url)}" data-search="${this.escapeAttr(`${url} ${page.target}`)}" title="Show the issues on this page">
-        <span class="page-card-head"><span class="severity-badge ${highest}">${highest === 'Pass' ? '' : `<i class="sev-mark ${highest.toLowerCase()}" aria-hidden="true"></i>`}${highest === 'Pass' ? 'No issues' : `Highest: ${this.escape(highest)}`}</span><span class="page-count">${this.plural(this.groupIssues(page.issues).length, 'issue')}</span></span>
+        <span class="page-card-head"><span class="severity-badge ${highest}">${highest === 'Pass' ? '' : `<i class="sev-mark ${highest.toLowerCase()}" aria-hidden="true"></i>`}${highest === 'Pass' ? 'No issues' : highest === 'Suggestion' ? 'Suggestions only' : `Highest: ${this.escape(highest)}`}</span><span class="page-count">${this.plural(this.groupIssues(page.issues).length, 'finding')}</span></span>
         <span class="page-title">${this.escape(page.target)}</span>
         <span class="page-url">${this.escape(url)}</span>
         <span class="page-meta">${this.plural(page.viewports.size, 'viewport')} audited.<span class="screen-only"> Show this page's issues</span></span>
@@ -300,7 +304,7 @@ export class HtmlReportGenerator {
   private summary(results: AuditResult[], issues: AuditIssue[]): Record<string, number | string> {
     const pages = new Set(results.map((result) => result.page.url)).size;
     const targets = new Set(results.map((result) => result.targetName || result.page.targetName)).size;
-    const weighted = issues.reduce((score, issue) => {
+    const weighted = issues.filter((issue) => issue.severity !== 'Suggestion').reduce((score, issue) => {
       const penalty = issue.severity === 'Critical' ? 15 : issue.severity === 'High' ? 10 : issue.severity === 'Medium' ? 5 : 2;
       return score - penalty;
     }, 100);
@@ -308,16 +312,18 @@ export class HtmlReportGenerator {
     const status = healthScore >= 90 ? 'Excellent' : healthScore >= 75 ? 'Healthy' : healthScore >= 50 ? 'Warning' : 'Needs Attention';
     // Counted like the issue cards: one per problem per page, however many elements or viewports.
     const groups = this.groupIssues(issues);
-    const count = (severity: AuditIssue['severity']) => groups.filter((group) => group[0].severity === severity).length;
+    const bugGroups = groups.filter((group) => group[0].severity !== 'Suggestion');
+    const count = (severity: AuditIssue['severity']) => bugGroups.filter((group) => group[0].severity === severity).length;
     return {
       targets,
       pagesCrawled: pages,
       viewportExecutions: results.length,
-      totalIssues: groups.length,
+      totalIssues: bugGroups.length,
       criticalIssues: count('Critical'),
       highIssues: count('High'),
       mediumIssues: count('Medium'),
       lowIssues: count('Low'),
+      suggestions: groups.length - bugGroups.length,
       healthScore,
       status
     };
@@ -409,7 +415,8 @@ export class HtmlReportGenerator {
       criticalIssues: 'Critical',
       highIssues: 'High',
       mediumIssues: 'Medium',
-      lowIssues: 'Low'
+      lowIssues: 'Low',
+      suggestions: 'Suggestion'
     };
     const summaryCards = Object.entries(summary)
       .map(([key, value]) => {
@@ -417,7 +424,7 @@ export class HtmlReportGenerator {
         const href = key === 'viewportExecutions' ? '#executions' : key === 'targets' || key === 'pagesCrawled' ? '#pages' : '#issues';
         const action = severity ? ` data-filter-severity="${severity}"` : key === 'totalIssues' ? ' data-reset-filters' : '';
         const hint = severity
-          ? `Show ${severity.toLowerCase()} issues`
+          ? `Show ${severity === 'Suggestion' ? 'suggestions' : `${severity.toLowerCase()} issues`}`
           : href === '#pages'
             ? 'Go to audited pages'
             : href === '#executions'
@@ -510,8 +517,8 @@ export class HtmlReportGenerator {
     <section id="issues" class="section">
       <div class="section-heading"><h2>Issues</h2><p>The same problem found in several viewports is listed once, with every viewport it affects.</p></div>
       <div class="toolbar panel">
-        <div class="field"><label for="severityFilter">Severity</label>
-          <select id="severityFilter"><option value="all">All severities</option><option>Critical</option><option>High</option><option>Medium</option><option>Low</option></select></div>
+        <div class="field">        <label for="severityFilter">Classification</label>
+        <select id="severityFilter"><option value="all">All classifications</option><option>Critical</option><option>High</option><option>Medium</option><option>Low</option><option>Suggestion</option></select></div>
         <div class="field"><label for="categoryFilter">Category</label>
           <select id="categoryFilter"><option value="all">All categories</option>${categories.map((category) => `<option value="${this.escapeAttr(category)}">${this.escape(category)}</option>`).join('')}</select></div>
         <div class="field"><label for="viewportFilter">Viewport</label>
@@ -530,24 +537,29 @@ export class HtmlReportGenerator {
     </section>
 
     <section id="executions" class="section">
-      <div class="section-heading"><h2>Page executions</h2><p>Each row is one page checked in one viewport.<span class="screen-only"> Select an issue count to see those issues.</span></p></div>
+      <div class="section-heading"><h2>Page executions</h2><p>Each row is one page checked in one viewport.<span class="screen-only"> Select a findings count to see those findings.</span></p></div>
       <div class="table-wrap panel">
         <table class="exec-table">
-          <thead><tr><th scope="col">Target</th><th scope="col">Page</th><th scope="col">Viewport</th><th scope="col">Screen resolution</th><th scope="col">Issues</th><th scope="col">Load</th><th scope="col">Screenshots</th></tr></thead>
+          <thead><tr><th scope="col">Target</th><th scope="col">Page</th><th scope="col">Viewport</th><th scope="col">Screen resolution</th><th scope="col">Findings</th><th scope="col">Load</th><th scope="col">Screenshots</th></tr></thead>
           <tbody>
             ${results
               .map(
-                (result, index) => `<tr id="exec-${index}" data-viewport="${this.escapeAttr(result.viewport)}">
+                (result, index) => {
+                  const bugCount = this.groupIssues(result.issues.filter((issue) => issue.severity !== 'Suggestion')).length;
+                  const suggestionCount = this.groupIssues(result.issues.filter((issue) => issue.severity === 'Suggestion')).length;
+                  const findingCount = `${this.plural(bugCount, 'issue')}${suggestionCount ? `, ${this.plural(suggestionCount, 'suggestion')}` : ''}`;
+                  return `<tr id="exec-${index}" data-viewport="${this.escapeAttr(result.viewport)}">
                   <td>${this.escape(result.targetName || result.page.targetName)}</td>
                   <td class="cell-url"><a href="${this.escapeAttr(result.page.url)}" target="_blank" rel="noopener noreferrer">${this.escape(result.page.url)}</a></td>
                   <td>${this.escape(result.viewport)}</td>
                   <td>${this.resolutionHtml(result.resolution)}</td>
-                  <td><button type="button" class="link-button" data-filter-page="${this.escapeAttr(result.page.url)}" data-filter-viewport="${this.escapeAttr(result.viewport)}">${this.plural(this.groupIssues(result.issues).length, 'issue')}</button></td>
+                  <td><button type="button" class="link-button" data-filter-page="${this.escapeAttr(result.page.url)}" data-filter-viewport="${this.escapeAttr(result.viewport)}">${findingCount}</button></td>
                   <td class="nowrap">${result.performance?.loadTimeMs !== undefined ? `${Math.round(result.performance.loadTimeMs)} ms` : 'Not measured'}</td>
                   <td><div class="shot-links">${result.screenshots
                     .map((shot) => `<button type="button" class="chip-button" data-evidence-src="${this.escapeAttr(this.assetHref(outputDir, shot.path))}" data-evidence-type="image" data-evidence-title="${this.escapeAttr(`${result.viewport}: ${this.screenshotLabel(shot.label)}`)}">${this.escape(this.screenshotLabel(shot.label))}</button>`)
                     .join('')}</div></td>
-                </tr>`
+                </tr>`;
+                }
               )
               .join('')}
           </tbody>
@@ -999,22 +1011,30 @@ export class HtmlReportGenerator {
       ['Issue ID', 'Target', 'Page URL', 'Category', 'Issue', 'Severity', 'Viewport', 'Browser', 'Device', 'Resolution', 'Expected', 'Actual', 'Business Impact', 'Recommendation', 'Selector', 'Timestamp', 'Evidence'],
       ...issues.map((issue) => [issue.id, issue.targetName ?? '', issue.url, issue.category, issue.description, issue.severity, issue.viewport, issue.browser ?? 'Chromium', issue.device ?? issue.viewport, issue.resolution?.label ?? '', issue.expected ?? '', issue.actual ?? '', issue.businessImpact ?? '', issue.suggestedFix, issue.selector ?? '', issue.timestamp ?? '', (issue.evidence ?? []).join(' | ')])
     ];
-    const pageMap = new Map<string, { target: string; count: number; highest: string; viewports: Set<string> }>();
+    const pageMap = new Map<string, { target: string; count: number; suggestions: number; highest: string; viewports: Set<string> }>();
     for (const result of results) {
-      const page = pageMap.get(result.page.url) ?? { target: result.targetName, count: 0, highest: 'Low', viewports: new Set<string>() };
-      page.count += result.issues.length;
+      const page = pageMap.get(result.page.url) ?? { target: result.targetName, count: 0, suggestions: 0, highest: 'Pass', viewports: new Set<string>() };
       page.viewports.add(result.viewport);
       for (const issue of result.issues) {
-        if (this.severityRank(issue.severity) < this.severityRank(page.highest as AuditIssue['severity'])) page.highest = issue.severity;
+        if (issue.severity === 'Suggestion') {
+          page.suggestions += 1;
+          if (page.highest === 'Pass') page.highest = 'Suggestion';
+          continue;
+        }
+        page.count += 1;
+        if (page.highest === 'Pass' || page.highest === 'Suggestion' ||
+          this.severityRank(issue.severity) < this.severityRank(page.highest as AuditIssue['severity'])) {
+          page.highest = issue.severity;
+        }
       }
       pageMap.set(result.page.url, page);
     }
-    const pageRows = [['Target', 'Page URL', 'Issues', 'Highest Severity', 'Viewports'], ...Array.from(pageMap.entries()).map(([url, page]) => [page.target, url, page.count, page.highest, Array.from(page.viewports).join(', ')])];
+    const pageRows = [['Target', 'Page URL', 'Issues', 'Suggestions', 'Highest Severity', 'Viewports'], ...Array.from(pageMap.entries()).map(([url, page]) => [page.target, url, page.count, page.suggestions, page.highest, Array.from(page.viewports).join(', ')])];
     const evidenceRows = [['Issue ID', 'Page URL', 'Evidence Path', 'Type'], ...issues.flatMap((issue) => (issue.evidence ?? []).map((evidence) => [issue.id, issue.url, evidence, evidence.includes('defect-') ? 'Annotated or defect evidence' : 'Page evidence']))];
     const assertionRows = [['Component', 'Check', 'Result', 'Severity', 'Page URL', 'Viewport', 'Expected', 'Actual', 'Comment', 'Recommendation'], ...results.flatMap((result) => (result.checks ?? []).map((check) => [check.component, check.checkName, check.result, check.severity, check.url, check.viewport, check.expected, check.actual, check.comment, check.recommendation ?? '']))];
     const summaryRows = [['Metric', 'Value'], ...Object.entries(summary), ['Run ID', runId], ['Generated', new Date().toISOString()]];
     const worksheet = (name: string, data: unknown[][], filter = true, rowStyles?: (row: unknown[], index: number) => string | undefined): string => `<Worksheet ss:Name="${this.escapeXml(name)}"><Table>${data.map((row, index) => rows(row, index === 0, rowStyles?.(row, index))).join('')}</Table>${filter ? `<AutoFilter x:Range="R1C1:R${Math.max(1, data.length)}C${Math.max(1, data[0]?.length ?? 1)}"/>` : ''}</Worksheet>`;
-    const workbook = `<?xml version="1.0"?><Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"><Styles><Style ss:ID="Header"><Font ss:Bold="1" ss:Color="#FFFFFF"/><Interior ss:Color="#1F4E78" ss:Pattern="Solid"/><Alignment ss:WrapText="1" ss:Vertical="Center"/></Style><Style ss:ID="Critical"><Interior ss:Color="#F4CCCC" ss:Pattern="Solid"/><Alignment ss:WrapText="1" ss:Vertical="Top"/></Style><Style ss:ID="High"><Interior ss:Color="#FCE4D6" ss:Pattern="Solid"/><Alignment ss:WrapText="1" ss:Vertical="Top"/></Style><Style ss:ID="Medium"><Interior ss:Color="#D9EAF7" ss:Pattern="Solid"/><Alignment ss:WrapText="1" ss:Vertical="Top"/></Style><Style ss:ID="Low"><Interior ss:Color="#E7E6E6" ss:Pattern="Solid"/><Alignment ss:WrapText="1" ss:Vertical="Top"/></Style><Style ss:ID="Pass"><Interior ss:Color="#E2F0D9" ss:Pattern="Solid"/><Alignment ss:WrapText="1" ss:Vertical="Top"/></Style><Style ss:ID="Fail"><Interior ss:Color="#F4CCCC" ss:Pattern="Solid"/><Alignment ss:WrapText="1" ss:Vertical="Top"/></Style></Styles>${worksheet('Executive Summary', summaryRows, false)}${worksheet('Findings', findings, true, (row, index) => index === 0 ? undefined : String(row[5] ?? 'Low'))}${worksheet('Page Summary', pageRows, true, (row, index) => index === 0 ? undefined : String(row[3] ?? 'Low'))}${worksheet('Evidence Register', evidenceRows)}${worksheet('Assertions', assertionRows, true, (row, index) => index === 0 ? undefined : String(row[2] ?? '') === 'PASS' ? 'Pass' : String(row[2] ?? '') === 'FAIL' ? 'Fail' : undefined)}</Workbook>`;
+    const workbook = `<?xml version="1.0"?><Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"><Styles><Style ss:ID="Header"><Font ss:Bold="1" ss:Color="#FFFFFF"/><Interior ss:Color="#1F4E78" ss:Pattern="Solid"/><Alignment ss:WrapText="1" ss:Vertical="Center"/></Style><Style ss:ID="Critical"><Interior ss:Color="#F4CCCC" ss:Pattern="Solid"/><Alignment ss:WrapText="1" ss:Vertical="Top"/></Style><Style ss:ID="High"><Interior ss:Color="#FCE4D6" ss:Pattern="Solid"/><Alignment ss:WrapText="1" ss:Vertical="Top"/></Style><Style ss:ID="Medium"><Interior ss:Color="#D9EAF7" ss:Pattern="Solid"/><Alignment ss:WrapText="1" ss:Vertical="Top"/></Style><Style ss:ID="Low"><Interior ss:Color="#E7E6E6" ss:Pattern="Solid"/><Alignment ss:WrapText="1" ss:Vertical="Top"/></Style><Style ss:ID="Suggestion"><Interior ss:Color="#E4D7F5" ss:Pattern="Solid"/><Alignment ss:WrapText="1" ss:Vertical="Top"/></Style><Style ss:ID="Pass"><Interior ss:Color="#E2F0D9" ss:Pattern="Solid"/><Alignment ss:WrapText="1" ss:Vertical="Top"/></Style><Style ss:ID="Fail"><Interior ss:Color="#F4CCCC" ss:Pattern="Solid"/><Alignment ss:WrapText="1" ss:Vertical="Top"/></Style></Styles>${worksheet('Executive Summary', summaryRows, false)}${worksheet('Findings', findings, true, (row, index) => index === 0 ? undefined : String(row[5] ?? 'Low'))}${worksheet('Page Summary', pageRows, true, (row, index) => index === 0 ? undefined : String(row[4] ?? 'Low'))}${worksheet('Evidence Register', evidenceRows)}${worksheet('Assertions', assertionRows, true, (row, index) => index === 0 ? undefined : String(row[2] ?? '') === 'PASS' ? 'Pass' : String(row[2] ?? '') === 'FAIL' ? 'Fail' : undefined)}</Workbook>`;
     fs.writeFileSync(path.join(outputDir, fileName), workbook, 'utf-8');
   }
 
@@ -1029,7 +1049,7 @@ export class HtmlReportGenerator {
       --bg:#f3f5f8; --panel:#ffffff; --sunken:#f7f8fb; --line:#dee3ea; --line-strong:#c4ccd8;
       --text:#172033; --text-2:#454f62; --muted:#5f6a7d; --bar:#141f35;
       --accent:#2d436d; --accent-ink:#2c4a88; --accent-soft:#e8edf6;
-      --critical:#d03b3b; --high:#ec835a; --medium:#fab219; --low:#3987e5;
+      --critical:#d03b3b; --high:#ec835a; --medium:#fab219; --low:#3987e5; --suggestion:#7651a8;
       --success:#1e6b45; --success-soft:#e4f3ea; --warning:#804e00; --warning-soft:#fdf3db; --danger:#a12a2a; --danger-soft:#fbe9e9;
       --radius:12px; --radius-sm:8px;
     }
@@ -1101,6 +1121,7 @@ export class HtmlReportGenerator {
 
     .sev-mark { display:inline-block; width:12px; height:12px; border-radius:3px; flex:0 0 auto; }
     .sev-mark.critical { background:var(--critical); } .sev-mark.high { background:var(--high); } .sev-mark.medium { background:var(--medium); } .sev-mark.low { background:var(--low); }
+    .sev-mark.suggestion { background:var(--suggestion); }
 
     .insights-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; margin-top:16px; }
     .bar-chart { display:grid; gap:4px; margin-top:16px; }
@@ -1135,6 +1156,7 @@ export class HtmlReportGenerator {
 
     .severity-badge { display:inline-flex; align-items:center; gap:8px; font-size:14px; font-weight:700; color:var(--text); white-space:nowrap; }
     .severity-badge.Pass { color:var(--success); }
+    .severity-badge.Suggestion { color:var(--suggestion); }
 
     .toolbar { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)) minmax(0,1.4fr); gap:16px; padding:20px; }
     .field { display:flex; flex-direction:column; gap:6px; min-width:0; }
@@ -1297,7 +1319,7 @@ export class HtmlReportGenerator {
   }
 
   private severityRank(severity: AuditIssue['severity']): number {
-    return { Critical: 0, High: 1, Medium: 2, Low: 3 }[severity];
+    return { Critical: 0, High: 1, Medium: 2, Low: 3, Suggestion: 4 }[severity];
   }
 
   /** "pagesCrawled" becomes "Pages crawled". */

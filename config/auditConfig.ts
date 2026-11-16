@@ -17,7 +17,7 @@ function booleanFromEnv(name: string, fallback = false): boolean {
   return ['1', 'true', 'yes', 'on'].includes(value);
 }
 
-export type QualityGateSeverity = Exclude<Severity, 'Low'> | 'Off';
+export type QualityGateSeverity = Exclude<Severity, 'Low' | 'Suggestion'> | 'Off';
 export type LayoutShiftMode = 'strict' | 'humanVision';
 
 function qualityGateSeverityFromEnv(): QualityGateSeverity {

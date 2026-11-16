@@ -1,7 +1,7 @@
 import type { QualityGateSeverity } from '../config/auditConfig';
-import type { Severity } from './types';
+import type { BugSeverity, Severity } from './types';
 
-const severityRank: Record<Severity, number> = {
+const severityRank: Record<BugSeverity, number> = {
   Critical: 3,
   High: 2,
   Medium: 1,
@@ -9,7 +9,7 @@ const severityRank: Record<Severity, number> = {
 };
 
 export function isBlockingSeverity(severity: Severity, threshold: QualityGateSeverity): boolean {
-  return threshold !== 'Off' && severityRank[severity] >= severityRank[threshold];
+  return severity !== 'Suggestion' && threshold !== 'Off' && severityRank[severity] >= severityRank[threshold];
 }
 
 export function qualityGateLabel(threshold: QualityGateSeverity): string {

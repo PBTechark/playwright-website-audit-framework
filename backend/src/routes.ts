@@ -95,6 +95,7 @@ export function createApiRouter(store: AuditStore, runner: AuditRunner, auth: Au
           failed: audits.filter((audit) => audit.status === 'failed' || audit.status === 'interrupted').length,
           pagesTested: sum((audit) => audit.summary?.pagesTested ?? 0),
           issuesFound: sum((audit) => audit.summary?.totalIssues ?? 0),
+          suggestionsFound: sum((audit) => audit.summary?.suggestions ?? 0),
           critical: sum((audit) => audit.summary?.critical ?? 0),
           high: sum((audit) => audit.summary?.high ?? 0)
         },

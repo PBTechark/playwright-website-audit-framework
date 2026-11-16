@@ -16,6 +16,7 @@ export interface AssertionInput {
   recommendation: string;
   selector?: string;
   evidence?: string[];
+  evidenceDetails?: AuditIssue['evidenceDetails'];
   boundingBox?: AuditCheck['boundingBox'];
   responseStatus?: number;
   consoleLogs?: string[];
@@ -59,6 +60,7 @@ export function recordAssertion(input: AssertionInput): { check: AuditCheck; iss
       actual: input.actual,
       suggestedFix: input.recommendation,
       evidence: input.evidence,
+      evidenceDetails: input.evidenceDetails,
       timestamp: check.timestamp,
       details: { boundingBox: input.boundingBox, responseStatus: input.responseStatus, assertion: input.details }
     })

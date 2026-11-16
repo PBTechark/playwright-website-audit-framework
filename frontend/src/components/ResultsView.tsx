@@ -5,7 +5,7 @@ import { IssueGroup, groupFindings, splitMeasuredDetails, unique } from '../lib/
 import { pagePath, plural, safeHref, screenshotLabel, shortUrl } from '../lib/format';
 import { Lightbox, LightboxImage } from './Lightbox';
 import { LogViewer } from './LogViewer';
-import { EmptyState, SEVERITIES, SectionHeader, SeverityBadge, SeverityMark } from './ui';
+import { EmptyState, FINDING_CLASSIFICATIONS, SectionHeader, SeverityBadge, SeverityMark } from './ui';
 
 type Tab = 'issues' | 'pages' | 'reports' | 'log';
 
@@ -172,8 +172,8 @@ function IssuesTab({
           />
         </div>
 
-        <FilterGroup title="Severity">
-          {SEVERITIES.map((severity) => {
+        <FilterGroup title="Classification">
+          {FINDING_CLASSIFICATIONS.map((severity) => {
             const selected = filters.severities.includes(severity);
             return (
               <RailButton
@@ -526,12 +526,13 @@ function PageCard({
           </a>
           <p className="mt-2 text-sm text-ink-2">
             {page.status !== undefined && <span className={page.status >= 400 ? 'font-semibold text-danger' : ''}>HTTP {page.status}. </span>}
-            {plural(page.issues, 'issue')} across {plural(page.viewports.length, 'viewport')}.
+            {plural(page.issues, 'issue')}
+            {page.suggestions > 0 && ` and ${plural(page.suggestions, 'suggestion')}`} across {plural(page.viewports.length, 'viewport')}.
           </p>
         </div>
-        {page.issues > 0 && (
+        {page.issues + page.suggestions > 0 && (
           <button type="button" className="btn-secondary shrink-0" onClick={() => showIssues(page.url)}>
-            Show this page’s issues
+            Show this page’s findings
           </button>
         )}
       </div>
@@ -546,6 +547,7 @@ function PageCard({
               </h4>
               <span className="text-sm text-ink-3">
                 {plural(viewport.issues, 'issue')}
+                {viewport.suggestions > 0 && `, ${plural(viewport.suggestions, 'suggestion')}`}
                 {viewport.loadTimeMs !== undefined && `, loaded in ${(viewport.loadTimeMs / 1000).toFixed(1)} s`}
               </span>
             </div>

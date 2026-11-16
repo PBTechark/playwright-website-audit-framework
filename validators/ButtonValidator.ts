@@ -202,11 +202,13 @@ export class ButtonValidator {
         element: HTMLElement,
         iconElements: HTMLElement[]
       ): Pick<ButtonSnapshot, 'iconState' | 'iconDetails'> => {
-        const observations = iconElements.map((icon) => {
+        const inspectedElements = Array.from(new Set([element, ...iconElements]));
+        const observations = inspectedElements.map((icon) => {
           const rect = icon.getBoundingClientRect();
           const style = window.getComputedStyle(icon);
           const before = window.getComputedStyle(icon, '::before');
           const after = window.getComputedStyle(icon, '::after');
+          const pseudoStyles = [before, after];
           const pseudoContent = [before.content, after.content].find(
             (content) => content !== 'none' && content !== 'normal' && content !== '""' && content !== "''"
           );
@@ -221,7 +223,40 @@ export class ButtonValidator {
           const imageLoaded = image ? image.complete && image.naturalWidth > 0 : undefined;
           const svg = icon instanceof SVGElement ? icon : icon.querySelector('svg');
           const svgHasGraphic = svg ? Boolean(svg.querySelector('path,use,circle,rect,polygon,line,polyline')) : undefined;
-          const hasBackground = style.backgroundImage !== 'none' || style.maskImage !== 'none';
+          const hasBackground =
+            rect.width > 0 &&
+            rect.height > 0 &&
+            style.display !== 'none' &&
+            style.visibility !== 'hidden' &&
+            Number(style.opacity) > 0.01 &&
+            [style, ...pseudoStyles].some(
+              (computedStyle) =>
+                computedStyle.display !== 'none' &&
+                computedStyle.visibility !== 'hidden' &&
+                Number(computedStyle.opacity) > 0.01 &&
+                (computedStyle.backgroundImage !== 'none' ||
+                  computedStyle.maskImage !== 'none' ||
+                  computedStyle.webkitMaskImage !== 'none')
+            );
+          const hasVisibleGlyph = pseudoStyles.some((computedStyle) => {
+            const content = computedStyle.content;
+            return Boolean(
+              content &&
+                content !== 'none' &&
+                content !== 'normal' &&
+                content !== '""' &&
+                content !== "''" &&
+                rect.width > 0 &&
+                rect.height > 0 &&
+                style.display !== 'none' &&
+                style.visibility !== 'hidden' &&
+                Number(style.opacity) > 0.01 &&
+                computedStyle.display !== 'none' &&
+                computedStyle.visibility !== 'hidden' &&
+                Number(computedStyle.opacity) > 0.01 &&
+                Number.parseFloat(computedStyle.fontSize) > 0
+            );
+          });
           return {
             className: typeof icon.className === 'string' ? icon.className : icon.getAttribute('class') ?? '',
             width: Number(rect.width.toFixed(1)),
@@ -233,10 +268,10 @@ export class ButtonValidator {
             imageLoaded,
             svgHasGraphic,
             hasBackground,
-            hasVisibleGlyph: Boolean(pseudoContent && rect.width > 0 && rect.height > 0)
+            hasVisibleGlyph
           };
         });
-        const hasFontIconClass = iconElements.some((icon) =>
+        const hasFontIconClass = inspectedElements.some((icon) =>
           /(^|\s)fa-[\w-]+/.test(typeof icon.className === 'string' ? icon.className : icon.getAttribute('class') ?? '')
         ) || /(^|\s)fa-[\w-]+/.test(typeof element.className === 'string' ? element.className : '');
         const failedFont = observations.some((observation) => observation.failedFont);
@@ -247,10 +282,10 @@ export class ButtonValidator {
           observation.hasBackground
         );
         const hasBrokenImage = observations.some((observation) => observation.imageLoaded === false);
-        const state: ButtonSnapshot['iconState'] = failedFont
-          ? 'font-failed'
-          : rendered
-            ? 'rendered'
+        const state: ButtonSnapshot['iconState'] = rendered
+          ? 'rendered'
+          : failedFont
+            ? 'font-failed'
             : hasBrokenImage || hasFontIconClass
               ? 'missing'
               : 'unknown';
@@ -395,7 +430,7 @@ export class ButtonValidator {
         }
       }
 
-      if (button.iconControl && button.iconState === 'missing') {
+      if (button.visible && button.iconControl && button.iconState === 'missing') {
         const shot = await captureIssueEvidence();
         issues.push(
           createIssue({
@@ -412,7 +447,7 @@ export class ButtonValidator {
             ...evidenceFields(shot)
           })
         );
-      } else if (button.iconControl && button.iconState === 'font-failed') {
+      } else if (button.visible && button.iconControl && button.iconState === 'font-failed') {
         const shot = await captureIssueEvidence();
         issues.push(
           createIssue({
@@ -449,7 +484,8 @@ export class ButtonValidator {
           })
         );
       }
-      if (!button.text) {
+
+      if (button.visible && !button.text && !(button.iconControl && button.iconState === 'rendered')) {
         const shot = await captureIssueEvidence();
         issues.push(
           createIssue({
@@ -465,6 +501,7 @@ export class ButtonValidator {
           })
         );
       }
+
       if (button.visible && !button.disabled && button.text) {
         const hover = await this.inspectHoverState(page, button.selector).catch(() => null);
         if (hover?.reason) {
@@ -480,7 +517,7 @@ export class ButtonValidator {
               description: hover.reason.startsWith('Hover-state text contrast')
                 ? `Hover-state text contrast is insufficient: ${button.text}.`
                 : `Button text becomes unavailable on hover: ${button.text}.`,
-              severity: hover.reason.startsWith('Hover-state text contrast') ? 'Medium' : 'High',
+              severity: hover.reason.startsWith('Hover-state text contrast') ? 'Medium' : 'Suggestion',
               expected: 'Hover-state text meets the WCAG AA contrast requirement and remains visible.',
               actual: hover.reason,
               suggestedFix: hover.reason.startsWith('Hover-state text contrast')
@@ -501,7 +538,7 @@ export class ButtonValidator {
             viewport,
             selector: button.selector,
             description: 'Clickable button target is smaller than recommended touch size.',
-            severity: 'Low',
+            severity: 'Suggestion',
             suggestedFix: 'Increase the clickable target to at least 32 by 32 CSS pixels, preferably 44 by 44 on touch UI.',
             details: button,
             ...evidenceFields(shot)

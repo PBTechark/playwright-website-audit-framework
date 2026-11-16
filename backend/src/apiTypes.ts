@@ -1,7 +1,7 @@
 // API contract shared by the backend and the frontend (frontend/ imports this file type-only).
-import type { AuditCategory, Severity } from '../../utils/types';
+import type { AuditCategory, BugSeverity, Severity } from '../../utils/types';
 
-export type { AuditCategory, Severity };
+export type { AuditCategory, BugSeverity, Severity };
 
 export interface ViewportOption {
   name: string;
@@ -45,7 +45,9 @@ export type AuditPhase = 'crawling' | 'auditing' | 'reporting' | 'finished';
 export interface AuditSummary {
   pagesTested: number;
   viewportsTested: string[];
+  /** Bug findings only; suggestions are reported separately and do not count as issues. */
   totalIssues: number;
+  suggestions: number;
   critical: number;
   high: number;
   medium: number;
@@ -110,6 +112,7 @@ export interface PageViewportResult {
   viewport: string;
   resolution?: string;
   issues: number;
+  suggestions: number;
   screenshots: Array<{ label: string; path: string }>;
   loadTimeMs?: number;
 }
@@ -119,6 +122,7 @@ export interface PageResult {
   title?: string;
   status?: number;
   issues: number;
+  suggestions: number;
   viewports: PageViewportResult[];
 }
 
@@ -146,6 +150,7 @@ export interface DashboardResponse {
     failed: number;
     pagesTested: number;
     issuesFound: number;
+    suggestionsFound: number;
     critical: number;
     high: number;
   };

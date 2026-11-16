@@ -397,7 +397,8 @@ test.describe('Automated website audit', () => {
             viewport,
             metrics,
             signals,
-            screenshots.map((item) => item.path)
+            screenshots.map((item) => item.path),
+            pageItem.targetName
           );
           checks.push(...componentAssertions.checks);
           issues.push(...componentAssertions.issues);

@@ -43,7 +43,10 @@ export function AuditTable({
                 {audit.summary ? (
                   <>
                     <div className="mb-1.5 flex items-baseline justify-between gap-3 text-sm">
-                      <span className="font-semibold text-ink">{plural(audit.summary.totalIssues, 'issue')}</span>
+                      <span className="font-semibold text-ink">
+                        {plural(audit.summary.totalIssues, 'issue')}
+                        {(audit.summary.suggestions ?? 0) > 0 && <span className="ml-2 font-normal text-ink-3">{plural(audit.summary.suggestions, 'suggestion')}</span>}
+                      </span>
                       <span className="text-ink-3">{plural(audit.summary.pagesTested, 'page')}</span>
                     </div>
                     <SeverityStrip summary={audit.summary} size="sm" />

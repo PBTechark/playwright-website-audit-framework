@@ -1,4 +1,5 @@
-export type Severity = 'Critical' | 'High' | 'Medium' | 'Low';
+export type Severity = 'Critical' | 'High' | 'Medium' | 'Low' | 'Suggestion';
+export type BugSeverity = Exclude<Severity, 'Suggestion'>;
 
 export type AuditCategory =
   | 'Visual'

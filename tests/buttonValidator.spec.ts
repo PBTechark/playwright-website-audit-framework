@@ -1,6 +1,8 @@
 import fs from 'fs';
 import path from 'path';
 import { expect, test } from '@playwright/test';
+import { ComponentAssertionAudit } from '../audits/ComponentAssertionAudit';
+import { BrowserSignalCollector } from '../utils/browserSignals';
 import { ButtonValidator } from '../validators/ButtonValidator';
 
 test.describe('Button validator evidence', () => {
@@ -80,6 +82,25 @@ test.describe('Button validator evidence', () => {
     expect(issue?.actual).toContain('4.5:1 is required for 13.3px text');
   });
 
+  test('classifies button text hidden on hover as a suggestion', async ({ page }) => {
+    await page.setContent(`
+      <style>
+        button { width: 180px; height: 48px; color: black; background: white; }
+        button:hover { opacity: 0; }
+      </style>
+      <button>Call now</button>
+    `);
+
+    const issues = await new ButtonValidator().validate(page, 'https://example.com/', 'Desktop Full HD');
+
+    expect(issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        description: 'Button text becomes unavailable on hover: Call now.',
+        severity: 'Suggestion'
+      })
+    ]));
+  });
+
   test('discovers icon-only back-to-top controls and reports missing icon, name, and target size', async ({ page }) => {
     await page.setViewportSize({ width: 800, height: 600 });
     await page.setContent(`
@@ -108,7 +129,10 @@ test.describe('Button validator evidence', () => {
         details: expect.objectContaining({ backToTop: true })
       }),
       expect.objectContaining({ description: 'Button has no visible or accessible label.' }),
-      expect.objectContaining({ description: 'Clickable button target is smaller than recommended touch size.' })
+      expect.objectContaining({
+        description: 'Clickable button target is smaller than recommended touch size.',
+        severity: 'Suggestion'
+      })
     ]));
     expect(issues.some((issue) => issue.description === 'Back-to-top control does not return the page to the top.')).toBe(false);
   });
@@ -166,6 +190,141 @@ test.describe('Button validator evidence', () => {
     expect(issues.some((issue) => issue.selector?.includes('/home'))).toBe(false);
   });
 
+  test('uses the accessible-name rule for visible search and social icons', async ({ page }) => {
+    await page.setContent(`
+      <style>
+        .search-submit { width: 40px; height: 50px; }
+        .fa-search { display: inline-block; width: 16px; height: 16px; }
+        .fa-search::before { content: "⌕"; font: 20px Arial, sans-serif; }
+        .link-twitter { display: inline-block; width: 24px; height: 24px; }
+        .link-twitter::before { content: "X"; font: 20px Arial, sans-serif; }
+      </style>
+      <form role="search">
+        <input type="search" placeholder="To search, type and enter.">
+        <button class="search-submit" type="submit" role="button"><i class="fa fa-search"></i></button>
+      </form>
+      <a class="link-twitter" href="/social"><i class="fab fa-twitter"></i></a>
+    `);
+
+    const url = 'https://example.com/';
+    const issues = await new ButtonValidator().validate(page, url, 'Desktop Full HD');
+
+    expect(issues.filter((issue) => issue.description === 'Icon-only control has no rendered icon.')).toHaveLength(0);
+    expect(issues.some((issue) => issue.description === 'Button has no visible or accessible label.')).toBe(false);
+
+    const componentAudit = await new ComponentAssertionAudit().run(
+      page,
+      url,
+      'Desktop Full HD',
+      { loadTimeMs: 0, domContentLoadedMs: 0, totalRequests: 0, totalResourceBytes: 0 },
+      new BrowserSignalCollector(),
+      ['screenshots/unrelated-footer.png'],
+      'component-audit-test'
+    );
+    const searchNameIssue = componentAudit.issues.find((issue) =>
+      issue.description.startsWith('Button accessible name:')
+    );
+    expect(searchNameIssue).toBeDefined();
+    expect(searchNameIssue?.description).toBe('Button accessible name: Button does not expose a usable accessible name.');
+    expect(searchNameIssue?.actual).toContain('axe-core button-name rule failed');
+    expect(searchNameIssue?.evidence).toHaveLength(1);
+    expect(searchNameIssue?.evidence?.[0]).toContain(
+      'component-audit-test/Desktop Full HD/example.com-/component-'
+    );
+    expect(searchNameIssue?.evidence).not.toContain('screenshots/unrelated-footer.png');
+    expect(searchNameIssue?.evidenceDetails).toEqual([
+      expect.objectContaining({ annotated: true, width: 1280, height: 720 })
+    ]);
+    expect(componentAudit.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ checkName: 'Button visibility', result: 'PASS' }),
+        expect.objectContaining({ checkName: 'Button enabled', result: 'PASS' })
+      ])
+    );
+
+    await page.setContent('<button type="button"></button>');
+    const unlabeledButtonAudit = await new ComponentAssertionAudit().run(
+      page,
+      url,
+      'Desktop Full HD',
+      { loadTimeMs: 0, domContentLoadedMs: 0, totalRequests: 0, totalResourceBytes: 0 },
+      new BrowserSignalCollector(),
+      []
+    );
+    expect(unlabeledButtonAudit.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ description: 'Button accessible name: Button does not expose a usable accessible name.' })
+      ])
+    );
+  });
+
+  test('accepts valid accessible names from ARIA and title attributes', async ({ page }) => {
+    await page.setContent(`
+      <span id="labelled-button-name" hidden>Search</span>
+      <button aria-label="Open menu"></button>
+      <button aria-labelledby="labelled-button-name"></button>
+      <button title="Close dialog"></button>
+    `);
+
+    const result = await new ComponentAssertionAudit().run(
+      page,
+      'https://example.com/named-buttons',
+      'Mobile Portrait',
+      { loadTimeMs: 0, domContentLoadedMs: 0, totalRequests: 0, totalResourceBytes: 0 },
+      new BrowserSignalCollector(),
+      []
+    );
+    const nameChecks = result.checks.filter((check) => check.checkName === 'Button accessible name');
+
+    expect(nameChecks).toHaveLength(3);
+    expect(nameChecks.every((check) => check.result === 'PASS')).toBe(true);
+    expect(result.issues.some((issue) => issue.description.startsWith('Button accessible name:'))).toBe(false);
+  });
+
+  test('captures accessible-name evidence in the active mobile viewport', async ({ page }) => {
+    await page.setViewportSize({ width: 393, height: 852 });
+    await page.setContent('<button type="button"></button>');
+
+    const result = await new ComponentAssertionAudit().run(
+      page,
+      'https://example.com/mobile',
+      'Mobile Portrait',
+      { loadTimeMs: 0, domContentLoadedMs: 0, totalRequests: 0, totalResourceBytes: 0 },
+      new BrowserSignalCollector(),
+      ['screenshots/desktop-footer.png'],
+      'component-audit-mobile'
+    );
+    const issue = result.issues.find((candidate) =>
+      candidate.description.startsWith('Button accessible name:')
+    );
+
+    expect(issue?.viewport).toBe('Mobile Portrait');
+    expect(issue?.evidence).toHaveLength(1);
+    expect(issue?.evidence?.[0]).toContain('component-audit-mobile/Mobile Portrait/example.com-mobile/component-');
+    expect(issue?.evidence?.[0]).not.toContain('desktop-footer.png');
+    expect(issue?.evidenceDetails).toEqual([
+      expect.objectContaining({ annotated: true, width: 393, height: 852 })
+    ]);
+  });
+
+  test('continues to report a visible textless control when no icon is rendered', async ({ page }) => {
+    await page.setContent(`
+      <style>
+        .fa-search::before { content: none; }
+        button { width: 40px; height: 40px; }
+      </style>
+      <button type="button" class="fa fa-search"></button>
+    `);
+
+    const issues = await new ButtonValidator().validate(page, 'https://example.com/', 'Desktop Full HD');
+
+    expect(issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ description: 'Button has no visible or accessible label.' })
+      ])
+    );
+  });
+
   test('resolves dynamically referenced hidden navigation controls despite unrelated hrefs', async ({ page }) => {
     const ariaTargetId = `nav-${Date.now()}-primary`;
     const bootstrapTargetId = `nav-${Date.now()}-secondary`;
@@ -218,6 +377,7 @@ test.describe('Button validator evidence', () => {
     const targetIssues = issues.filter((issue) => issue.description.includes('smaller than recommended'));
 
     expect(targetIssues).toHaveLength(2);
+    expect(targetIssues.every((issue) => issue.severity === 'Suggestion')).toBe(true);
     expect(new Set(targetIssues.map((issue) => issue.selector)).size).toBe(2);
     for (const issue of targetIssues) {
       const target = page.locator(issue.selector ?? '');

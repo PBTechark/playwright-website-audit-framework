@@ -2,6 +2,8 @@ import { expect, test } from '@playwright/test';
 import { isBlockingSeverity } from '../utils/severityGate';
 
 test('quality gate supports Medium, High, Critical, and Off thresholds', () => {
+  expect(isBlockingSeverity('Suggestion', 'Medium')).toBe(false);
+  expect(isBlockingSeverity('Suggestion', 'Critical')).toBe(false);
   expect(isBlockingSeverity('Medium', 'Medium')).toBe(true);
   expect(isBlockingSeverity('High', 'Medium')).toBe(true);
   expect(isBlockingSeverity('Medium', 'High')).toBe(false);

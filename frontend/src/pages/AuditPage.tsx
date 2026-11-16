@@ -134,6 +134,9 @@ export function AuditPage() {
                 <span className="font-semibold">{plural(summary.totalIssues, 'issue')}</span> on {plural(summary.pagesTested, 'page')} across{' '}
                 {plural(summary.viewportsTested.length, 'viewport')}
               </p>
+              {(summary.suggestions ?? 0) > 0 && (
+                <p className="mb-3 text-sm text-ink-2">{plural(summary.suggestions ?? 0, 'suggestion')} shown separately; not counted as bugs.</p>
+              )}
               <SeverityStrip summary={summary} />
             </div>
           </div>

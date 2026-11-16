@@ -74,18 +74,24 @@ function issueKey(issue: AuditIssue, result: AuditResult): string {
 }
 
 function countIssues(result: AuditResult): number {
-  return new Set(result.issues.map((issue) => issueKey(issue, result))).size;
+  return new Set(result.issues.filter((issue) => issue.severity !== 'Suggestion').map((issue) => issueKey(issue, result))).size;
+}
+
+function countSuggestions(result: AuditResult): number {
+  return new Set(result.issues.filter((issue) => issue.severity === 'Suggestion').map((issue) => issueKey(issue, result))).size;
 }
 
 export function buildSummary(results: AuditResult[], viewports: string[], healthScore: number | null): AuditSummary {
   const issues = new Map<string, AuditIssue['severity']>();
   for (const result of results) for (const issue of result.issues) issues.set(issueKey(issue, result), issue.severity);
   const severities = [...issues.values()];
-  const count = (severity: AuditIssue['severity']) => severities.filter((value) => value === severity).length;
+  const bugs = severities.filter((severity) => severity !== 'Suggestion');
+  const count = (severity: AuditIssue['severity']) => bugs.filter((value) => value === severity).length;
   return {
     pagesTested: new Set(results.map((result) => result.page.url)).size,
     viewportsTested: viewports.filter((viewport) => results.some((result) => result.viewport === viewport)),
-    totalIssues: issues.size,
+    totalIssues: bugs.length,
+    suggestions: severities.filter((severity) => severity === 'Suggestion').length,
     critical: count('Critical'),
     high: count('High'),
     medium: count('Medium'),
@@ -95,7 +101,7 @@ export function buildSummary(results: AuditResult[], viewports: string[], health
 }
 
 export function buildFindings(results: AuditResult[]): Finding[] {
-  const severityRank = { Critical: 0, High: 1, Medium: 2, Low: 3 };
+  const severityRank = { Critical: 0, High: 1, Medium: 2, Low: 3, Suggestion: 4 };
   return results
     .flatMap((result) =>
       result.issues.map((issue) => ({
@@ -122,22 +128,28 @@ export function buildFindings(results: AuditResult[]): Finding[] {
 export function buildPages(results: AuditResult[], viewportOrder: string[]): PageResult[] {
   const pages = new Map<string, PageResult>();
   const pageIssues = new Map<string, Set<string>>();
+  const pageSuggestions = new Map<string, Set<string>>();
   for (const result of results) {
     const page = pages.get(result.page.url) ?? {
       url: result.page.url,
       title: result.page.title,
       status: result.page.status,
       issues: 0,
+      suggestions: 0,
       viewports: []
     };
-    const keys = pageIssues.get(page.url) ?? new Set<string>();
-    result.issues.forEach((issue) => keys.add(issueKey(issue, result)));
-    pageIssues.set(page.url, keys);
-    page.issues = keys.size;
+    const issueKeys = pageIssues.get(page.url) ?? new Set<string>();
+    const suggestionKeys = pageSuggestions.get(page.url) ?? new Set<string>();
+    result.issues.forEach((issue) => (issue.severity === 'Suggestion' ? suggestionKeys : issueKeys).add(issueKey(issue, result)));
+    pageIssues.set(page.url, issueKeys);
+    pageSuggestions.set(page.url, suggestionKeys);
+    page.issues = issueKeys.size;
+    page.suggestions = suggestionKeys.size;
     page.viewports.push({
       viewport: result.viewport,
       resolution: result.resolution?.label,
       issues: countIssues(result),
+      suggestions: countSuggestions(result),
       screenshots: result.screenshots
         .map((shot) => ({ label: shot.label, path: toEvidencePath(shot.path) }))
         .filter((shot): shot is { label: string; path: string } => Boolean(shot.path)),

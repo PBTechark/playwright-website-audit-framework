@@ -1,9 +1,24 @@
 import { expect, request, test } from '@playwright/test';
+import crypto from 'crypto';
 import fs from 'fs';
 import { createServer } from 'http';
 import { AddressInfo } from 'net';
+import os from 'os';
+import path from 'path';
 import { auditConfig } from '../config/auditConfig';
 import { LinkValidator } from '../validators/LinkValidator';
+
+async function withIsolatedLinkCache<T>(run: (cacheDir: string) => Promise<T>): Promise<T> {
+  const previousCacheDir = auditConfig.linkCacheDir;
+  const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'playwright-link-cache-'));
+  auditConfig.linkCacheDir = cacheDir;
+  try {
+    return await run(cacheDir);
+  } finally {
+    auditConfig.linkCacheDir = previousCacheDir;
+    fs.rmSync(cacheDir, { recursive: true, force: true });
+  }
+}
 
 test('reports visible CTA anchors that use placeholder href values', async ({ page }) => {
   await page.setContent(`
@@ -185,4 +200,98 @@ test('checks each link destination once per run and reuses the status for later 
     await api.dispose();
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
+});
+
+test('retries a transient server error and reports the recovered link as healthy', async ({ page }) => {
+  await withIsolatedLinkCache(async () => {
+    let hits = 0;
+    const server = createServer((_request, response) => {
+      hits += 1;
+      response.writeHead(hits === 1 ? 520 : 200, { 'content-type': 'text/html' });
+      response.end(hits === 1 ? 'Transient edge error' : 'Available');
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', resolve);
+    });
+    const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const api = await request.newContext();
+
+    try {
+      await page.setContent(`<a href="${origin}/recovering">Recovering page</a>`);
+      const result = await new LinkValidator(api, `${origin}/`).validate(page, `${origin}/source`, 'Desktop');
+
+      expect(hits).toBe(2);
+      expect(result.findings).toEqual([
+        expect.objectContaining({ destinationUrl: `${origin}/recovering`, statusCode: 200 })
+      ]);
+      expect(
+        result.issues.filter((issue) => issue.description.includes('Internal link has a failure'))
+      ).toHaveLength(0);
+    } finally {
+      await api.dispose();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+});
+
+test('rechecks cached server errors and does not cache persistent 5xx responses', async ({ page }) => {
+  await withIsolatedLinkCache(async (cacheDir) => {
+    let hits = 0;
+    const server = createServer((_request, response) => {
+      hits += 1;
+      response.writeHead(hits <= 3 ? 520 : 200, { 'content-type': 'text/html' });
+      response.end(hits <= 3 ? 'Transient edge error' : 'Recovered');
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', resolve);
+    });
+    const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const destinationUrl = `${origin}/recovering`;
+    const cachePath = path.join(
+      cacheDir,
+      `${crypto.createHash('sha1').update(destinationUrl).digest('hex')}.json`
+    );
+    fs.writeFileSync(
+      cachePath,
+      JSON.stringify({
+        sourceUrl: `${origin}/old-source`,
+        destinationUrl,
+        statusCode: 520,
+        redirectChain: [],
+        finalUrl: destinationUrl
+      }),
+      'utf-8'
+    );
+    const api = await request.newContext();
+
+    try {
+      await page.setContent(`<a href="${destinationUrl}">Recovering page</a>`);
+      const validator = new LinkValidator(api, `${origin}/`);
+      const failed = await validator.validate(page, `${origin}/source`, 'Desktop');
+      expect(hits).toBe(3);
+      expect(failed.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ severity: 'Critical', actual: 'Received HTTP 520.' })
+        ])
+      );
+
+      const recovered = await validator.validate(page, `${origin}/source-two`, 'Desktop');
+      expect(hits).toBe(4);
+      expect(recovered.findings).toEqual([
+        expect.objectContaining({ destinationUrl: destinationUrl, statusCode: 200 })
+      ]);
+      expect(
+        recovered.issues.filter((issue) => issue.description.includes('Internal link has a failure'))
+      ).toHaveLength(0);
+    } finally {
+      await api.dispose();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
 });
