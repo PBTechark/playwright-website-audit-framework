@@ -4,6 +4,17 @@ import { AuditIssue } from '../utils/types';
 
 export class FooterValidator {
   async validate(page: Page, url: string, viewport: string): Promise<AuditIssue[]> {
+    const scrollPosition = await page.evaluate(() => ({ x: window.scrollX, y: window.scrollY }));
+    try {
+      return await this.validateFooter(page, url, viewport);
+    } finally {
+      await page.evaluate(({ x, y }) => {
+        window.scrollTo({ left: x, top: y, behavior: 'instant' });
+      }, scrollPosition);
+    }
+  }
+
+  private async validateFooter(page: Page, url: string, viewport: string): Promise<AuditIssue[]> {
     const issues: AuditIssue[] = [];
     const footer = page.locator('footer, [role="contentinfo"]').first();
     const footerCount = await footer.count();

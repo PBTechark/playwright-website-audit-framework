@@ -90,16 +90,23 @@ export class ButtonValidator {
       };
       const isVisible = (element: HTMLElement): boolean => {
         const rect = element.getBoundingClientRect();
-        const style = window.getComputedStyle(element);
-        const visibleArea =
-          Math.max(0, Math.min(rect.right, window.innerWidth) - Math.max(rect.left, 0)) *
-          Math.max(0, Math.min(rect.bottom, window.innerHeight) - Math.max(rect.top, 0));
-        return rect.width > 0 &&
-          rect.height > 0 &&
-          visibleArea > 40 &&
-          style.display !== 'none' &&
-          style.visibility !== 'hidden' &&
-          Number(style.opacity) > 0.01;
+        if (rect.width <= 0 || rect.height <= 0) return false;
+
+        let current: HTMLElement | null = element;
+        while (current) {
+          const style = window.getComputedStyle(current);
+          if (
+            style.display === 'none' ||
+            style.visibility === 'hidden' ||
+            style.visibility === 'collapse' ||
+            style.contentVisibility === 'hidden' ||
+            Number(style.opacity) <= 0.01
+          ) {
+            return false;
+          }
+          current = current.parentElement;
+        }
+        return true;
       };
       const hasVisibleControlledNavigation = (element: HTMLElement): boolean => {
         if (isVisible(element)) return false;

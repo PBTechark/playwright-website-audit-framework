@@ -48,6 +48,26 @@ test('recognizes rendered footer content when the semantic footer has a zero-siz
   expect(issues.some((issue) => issue.description === 'Footer is not visible.')).toBe(false);
 });
 
+test('restores the original scroll position after inspecting the footer', async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 600 });
+  await page.setContent(`
+    <style>
+      html { scroll-behavior: auto; }
+      body { margin: 0; }
+      main { height: 1200px; }
+      footer { height: 240px; }
+    </style>
+    <main>Page content</main>
+    <footer><a href="/contact">Contact</a><p>© 2026 Example</p></footer>
+  `);
+  const initialPosition = await page.evaluate(() => ({ x: window.scrollX, y: window.scrollY }));
+
+  const issues = await new FooterValidator().validate(page, 'https://example.com/', 'Desktop');
+
+  expect(issues.filter((issue) => issue.description.includes('Footer is not visible.'))).toHaveLength(0);
+  expect(await page.evaluate(() => ({ x: window.scrollX, y: window.scrollY }))).toEqual(initialPosition);
+});
+
 test('reports a footer whose content is hidden', async ({ page }) => {
   await page.setContent(`
     <footer style="display: none"><a href="/contact">Contact</a></footer>

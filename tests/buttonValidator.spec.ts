@@ -362,6 +362,76 @@ test.describe('Button validator evidence', () => {
     ]));
   });
 
+  test('does not call off-viewport logo and home links hidden and keeps each selector distinct', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await page.setContent(`
+      <style>
+        html { scroll-behavior: auto; }
+        body { margin: 0; }
+        header { height: 80px; }
+        header a { display: inline-flex; width: 24px; height: 24px; }
+        main { height: 1600px; }
+      </style>
+      <header>
+        <a class="header-logo" href="/" aria-label="Website logo">
+          <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true">
+            <rect width="20" height="20" fill="black" />
+          </svg>
+        </a>
+        <a class="nav-button" href="/">Home</a>
+      </header>
+      <main>Page content</main>
+      <footer>End of page</footer>
+    `);
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
+
+    const targetName = 'button-visibility-scroll-test';
+    try {
+      const issues = await new ButtonValidator().validate(
+        page,
+        'https://example.com/event-calendar',
+        'Desktop Full HD',
+        targetName
+      );
+      const visibilityIssues = issues.filter((issue) => issue.description === 'Button is present but not visible.');
+      const targetSizeIssues = issues.filter((issue) =>
+        issue.description === 'Clickable button target is smaller than recommended touch size.'
+      );
+      const selectors = targetSizeIssues.map((issue) => issue.selector);
+
+      expect(visibilityIssues).toHaveLength(0);
+      expect(targetSizeIssues).toHaveLength(2);
+      expect(new Set(selectors).size).toBe(2);
+      for (const selector of selectors) {
+        const control = page.locator(selector ?? '');
+        expect(await control.count()).toBe(1);
+        expect(await control.evaluate((element) => element.tagName.toLowerCase())).toBe('a');
+      }
+    } finally {
+      fs.rmSync(path.join(process.cwd(), 'screenshots', targetName), { recursive: true, force: true });
+    }
+  });
+
+  test('continues to report CSS-hidden links and buttons', async ({ page }) => {
+    await page.setContent(`
+      <a class="nav-button" href="/" style="display:none">Hidden home link</a>
+      <button style="visibility:hidden">Hidden action</button>
+    `);
+
+    const issues = await new ButtonValidator().validate(page, 'https://example.com/', 'Desktop Full HD');
+    const hiddenIssues = issues.filter((issue) => issue.description === 'Button is present but not visible.');
+
+    expect(hiddenIssues).toHaveLength(2);
+    expect(new Set(hiddenIssues.map((issue) => issue.selector)).size).toBe(2);
+    expect(hiddenIssues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ details: expect.objectContaining({ tagName: 'a' }) }),
+        expect.objectContaining({ details: expect.objectContaining({ tagName: 'button' }) })
+      ])
+    );
+  });
+
   test('generates unique selectors for deeply nested buttons with duplicate ids', async ({ page }) => {
     await page.setContent(`
       <style>button { width: 20px; height: 20px; color: white; background: black; }</style>
