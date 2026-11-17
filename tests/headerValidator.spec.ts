@@ -16,6 +16,15 @@ function removeEvidence(paths: string[] | undefined): void {
   }
 }
 
+test('recognizes a visible branded header wrapper without semantic header markup', async ({ page }) => {
+  await page.setContent(`
+    <div class="site-header"><a class="brand" href="/">Example Clinic</a><nav><a href="/care">Care</a></nav></div>
+    <main><h1>Care</h1></main>
+  `);
+  const issues = await new HeaderValidator().validate(page, 'https://example.test/care', 'Desktop', false);
+  expect(issues.some((issue) => issue.description === 'Header or banner region is not visible.')).toBe(false);
+});
+
 test('recognizes a visible SVG brand mark in a home link when an earlier logo variant is hidden', async ({ page }) => {
   await openTestPage(page);
   await page.setContent(`

@@ -901,7 +901,7 @@ export async function detectDomDefects(page: Page): Promise<DomDefect[]> {
       .slice(0, 250);
 
     const footer = document.querySelector<HTMLElement>(
-      'footer, [role="contentinfo"], #footer, .site-footer, .page-footer'
+      'footer, [role="contentinfo"], #footer, .site-footer, .page-footer, [class*="footer" i], [id*="footer" i]'
     );
     if (footer) {
       const footerRect = footer.getBoundingClientRect();
@@ -956,7 +956,22 @@ export async function detectDomDefects(page: Page): Promise<DomDefect[]> {
         const overlapArea = xOverlap * yOverlap;
         const controlArea = controlRect.width * controlRect.height;
         const overlapRatio = controlArea > 0 ? overlapArea / controlArea : 0;
-        if (overlapArea > 100 && overlapRatio > 0.1) {
+        const centerX = Math.max(0, Math.min(viewportWidth - 1, controlRect.left + controlRect.width / 2));
+        const centerY = Math.max(0, Math.min(viewportHeight - 1, controlRect.top + controlRect.height / 2));
+        const hit = document.elementFromPoint(centerX, centerY);
+        const controlIsTopmost = Boolean(hit && (hit === control || control.contains(hit)));
+        const footerTextRects = Array.from(footer.querySelectorAll<HTMLElement>('a,button,[role="button"],p,li,h1,h2,h3,h4,span'))
+          .filter((item) => (item.innerText || item.textContent || '').trim().length > 0)
+          .flatMap((item) => Array.from(item.getClientRects()))
+          .filter((rect) => rect.width > 0 && rect.height > 0 && rect.right > controlRect.left && rect.left < controlRect.right && rect.bottom > controlRect.top && rect.top < controlRect.bottom);
+        const hidesFooterContent = footerTextRects.some((rect) => {
+          const x = (Math.max(rect.left, controlRect.left) + Math.min(rect.right, controlRect.right)) / 2;
+          const y = (Math.max(rect.top, controlRect.top) + Math.min(rect.bottom, controlRect.bottom)) / 2;
+          const topElement = document.elementFromPoint(x, y);
+          return Boolean(topElement && (topElement === control || control.contains(topElement)));
+        });
+        const coversFooterContent = footerTextRects.length > 0 && hidesFooterContent;
+        if (overlapArea > 100 && overlapRatio > 0.1 && controlIsTopmost && coversFooterContent) {
           defects.push({
             type: 'Footer Obstruction',
             selector: selectorFor(control),
@@ -964,6 +979,9 @@ export async function detectDomDefects(page: Page): Promise<DomDefect[]> {
             details: {
               overlapArea: Math.round(overlapArea),
               overlapRatio: Number(overlapRatio.toFixed(2)),
+              hitTested: true,
+              hidesFooterContent,
+              obstructedFooterTextRects: footerTextRects.length,
               positionedLayer: selectorFor(positionedLayer),
               footer: selectorFor(footer)
             }

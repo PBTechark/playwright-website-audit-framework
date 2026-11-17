@@ -39,9 +39,9 @@ test('reports upscaled and canvas-detected blurry images with actionable evidenc
 
   expect(upscaled).toMatchObject({
     selector: '#upscaled',
-    severity: 'Medium',
+    severity: 'High',
     expected: expect.any(String),
-    actual: expect.stringContaining('maximum upscale'),
+    actual: expect.stringContaining('effective upscale'),
     suggestedFix: expect.any(String)
   });
   expect(blurry).toMatchObject({
@@ -53,6 +53,27 @@ test('reports upscaled and canvas-detected blurry images with actionable evidenc
   });
   expect(upscaled?.evidence?.length).toBeGreaterThan(0);
   expect(blurry?.evidence?.length).toBeGreaterThan(0);
+});
+
+test('accounts for device pixel ratio when evaluating mobile image source resolution', async ({ page, request }) => {
+  await page.setViewportSize({ width: 393, height: 852 });
+  await page.setContent('<img id="retina" alt="Team portrait" style="width:180px;height:120px">');
+  await page.evaluate(() => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 180;
+    canvas.height = 120;
+    const context = canvas.getContext('2d')!;
+    context.fillStyle = '#243';
+    context.fillRect(0, 0, 180, 120);
+    const image = document.querySelector<HTMLImageElement>('#retina')!;
+    image.src = canvas.toDataURL('image/png');
+  });
+  await page.waitForFunction(() => document.querySelector<HTMLImageElement>('#retina')?.naturalWidth === 180);
+  await page.evaluate(() => Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: 2 }));
+  const result = await new ImageValidator(request).validate(page, 'https://quality.test/mobile', 'Mobile Portrait', 'quality-test');
+  const issue = result.issues.find((candidate) => candidate.description.startsWith('Upscaled Image'));
+  expect(issue?.actual).toContain('at 2x DPR');
+  expect(issue?.details).toMatchObject({ deviceScale: 2, upscaleRatio: 2 });
 });
 
 test('does not report broken rendering for hidden or fallback-backed images', async ({ page, request }) => {

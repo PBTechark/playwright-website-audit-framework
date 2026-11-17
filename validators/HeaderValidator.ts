@@ -18,7 +18,9 @@ type LogoInspection = {
 export class HeaderValidator {
   async validate(page: Page, url: string, viewport: string, isMobile: boolean): Promise<AuditIssue[]> {
     const issues: AuditIssue[] = [];
-    const header = page.locator('header:visible, [role="banner"]:visible').first();
+    const header = page.locator(
+      'header:visible, [role="banner"]:visible, #header:visible, .site-header:visible, .page-header:visible, [class*="header" i]:visible, [id*="header" i], [class*="banner" i]:visible, [id*="banner" i]'
+    ).filter({ has: page.locator('a, nav, [role="navigation"], img, svg, [role="img"]') }).first();
     const headerVisible = await header.isVisible().catch(() => false);
     if (!headerVisible) {
       issues.push(
@@ -238,7 +240,9 @@ export class HeaderValidator {
 
   private async checkStickyHeader(page: Page, url: string, viewport: string, issues: AuditIssue[]): Promise<void> {
     const result = await page.evaluate(() => {
-      const header = document.querySelector('header, [role="banner"]') as HTMLElement | null;
+      const header = document.querySelector<HTMLElement>(
+        'header, [role="banner"], #header, .site-header, .page-header, [class*="header" i], [id*="header" i], [class*="banner" i], [id*="banner" i]'
+      );
       if (!header) return { checked: false };
       const before = header.getBoundingClientRect().top;
       window.scrollTo(0, Math.min(500, document.documentElement.scrollHeight));

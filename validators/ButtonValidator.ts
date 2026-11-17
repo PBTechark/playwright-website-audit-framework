@@ -359,6 +359,8 @@ export class ButtonValidator {
           '[class*="chat" i]',
           '[id*="chat" i]'
         ].join(',')))
+        .filter((button) => !(button instanceof HTMLAnchorElement) || button.getAttribute('role') === 'button' ||
+          (!button.textContent?.trim() && (iconElementsFor(button).length > 0 || /(^|\s)(fa-[\w-]+|icon[\w-]*)/i.test(button.className))))
         .filter((button) => {
           const backToTop = isBackToTop(button);
           const iconElements = iconElementsFor(button);
@@ -474,7 +476,7 @@ export class ButtonValidator {
             viewport,
             selector: button.selector,
             description: 'Icon-only control has no rendered icon.',
-            severity: 'Medium',
+            severity: 'Low',
             expected: 'The control displays its intended icon.',
             actual: `An icon control was identified, but no visible icon glyph, loaded image, graphic SVG, or CSS background/mask was found.`,
             suggestedFix: 'Check the icon markup, CSS pseudo-element, and required icon font or image resource.',
@@ -510,7 +512,7 @@ export class ButtonValidator {
             viewport,
             selector: button.selector,
             description: 'Button is present but not visible.',
-            severity: 'Medium',
+            severity: 'Low',
             expected: 'A visible, operable control',
             actual: `No visible control box (${button.boundingBox.width} x ${button.boundingBox.height}px; display=${button.display}, visibility=${button.visibility}, opacity=${button.opacity}).`,
             suggestedFix: 'Remove hidden interactive controls or make the button visible when users need it.',
@@ -529,7 +531,7 @@ export class ButtonValidator {
             viewport,
             selector: button.selector,
             description: 'Button has no visible or accessible label.',
-            severity: 'Medium',
+            severity: 'Low',
             suggestedFix: 'Add button text, aria-label, or a labelled icon name.',
             details: button,
             ...evidenceFields(shot)

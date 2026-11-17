@@ -16,7 +16,10 @@ export class FooterValidator {
 
   private async validateFooter(page: Page, url: string, viewport: string): Promise<AuditIssue[]> {
     const issues: AuditIssue[] = [];
-    const footer = page.locator('footer, [role="contentinfo"]').first();
+    const footerCandidates = page.locator(
+      'footer, [role="contentinfo"], #footer, .site-footer, .page-footer, [class*="footer" i], [id*="footer" i]'
+    );
+    const footer = footerCandidates.filter({ has: page.locator('a, nav, [role="navigation"], img, svg, [class*="copyright" i]') }).last();
     const footerCount = await footer.count();
     const contentIndex = footerCount > 0 ? await this.lastRenderedContentIndex(footer) : -1;
     let visible = footerCount > 0 && await this.isVisibleInViewport(footer);
@@ -62,7 +65,7 @@ export class FooterValidator {
     const copyrightVisible = await page.evaluate(() => {
       const copyrightPattern = /copyright|©|all rights reserved/i;
       const candidates = Array.from(document.querySelectorAll<HTMLElement>(
-        'footer, [role="contentinfo"], .copyright, [class*="copyright" i], [id*="copyright" i]'
+        'footer, [role="contentinfo"], #footer, .site-footer, .page-footer, [class*="footer" i], [id*="footer" i], .copyright, [class*="copyright" i], [id*="copyright" i]'
       ));
       return candidates.some((element) => {
         const text = element.innerText || element.textContent || '';

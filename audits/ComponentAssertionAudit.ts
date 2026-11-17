@@ -186,7 +186,9 @@ export class ComponentAssertionAudit {
 
       const overflow = visibleOverflowElement();
       add('Layout','Horizontal scrolling',!hasVisibleHorizontalScroll() || !overflow,'High','No user-visible content forces horizontal scrolling',`scrollWidth=${document.documentElement.scrollWidth}, clientWidth=${document.documentElement.clientWidth}, overflowing=${overflow ? selector(overflow) : 'none'}`,'No customer-visible horizontal scrolling detected.','Visible page content creates horizontal scrolling.','Fix fixed-width or off-screen content that users can actually see.',overflow);
-      const footer = document.querySelector<HTMLElement>('footer,[role="contentinfo"]');
+      const footer = document.querySelector<HTMLElement>(
+        'footer,[role="contentinfo"],#footer,.site-footer,.page-footer,[class*="footer" i],[id*="footer" i]'
+      );
       add('Footer','Footer visibility',Boolean(footer && visible(footer)),'Medium','A visible footer',footer ? `visible=${visible(footer)}` : 'No footer found','Footer is visible.','Footer is missing or hidden.','Provide a visible contentinfo/footer region.',footer ?? undefined);
       return out;
     }, buttonNameFailures);

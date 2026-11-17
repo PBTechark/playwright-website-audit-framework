@@ -316,6 +316,48 @@ test('reports large blank whitespace after the footer', async ({ page }) => {
   ]));
 });
 
+test('does not report a fixed control overlapping empty footer background as an obstruction', async ({ page }) => {
+  await page.setViewportSize({ width: 393, height: 852 });
+  await page.setContent(`
+    <style>
+      body { margin:0; min-height:1300px; }
+      main { height:600px; }
+      footer { position:relative; height:260px; background:#eee; }
+      #floating { position:fixed; bottom:8px; right:8px; width:44px; height:44px; z-index:10; }
+    </style>
+    <main><p>Page content</p></main>
+    <footer><div style="height:150px"></div><p>© Example</p></footer>
+    <button id="floating">Chat</button>
+  `);
+  await page.evaluate(() => window.scrollTo(0, 0));
+  const defects = await detectDomDefects(page);
+  expect(defects.filter((item) => item.type === 'Footer Obstruction')).toHaveLength(0);
+});
+
+test('reports a fixed control when hit testing proves it covers footer text', async ({ page }) => {
+  await page.setViewportSize({ width: 393, height: 852 });
+  await page.setContent(`
+    <style>
+      body { margin:0; }
+      main { height:600px; }
+      footer { position:relative; height:260px; background:#eee; }
+      #floating { position:fixed; bottom:0; left:0; width:180px; height:60px; z-index:10; }
+    </style>
+    <main><p>Page content</p></main>
+    <footer><a id="footer-link" style="position:absolute;bottom:8px;left:8px;width:200px;height:40px" href="/privacy">Important footer links and copyright</a></footer>
+    <button id="floating">Floating action</button>
+  `);
+  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  const defects = await detectDomDefects(page);
+  expect(defects).toEqual(expect.arrayContaining([
+    expect.objectContaining({
+      type: 'Footer Obstruction',
+      selector: '#floating',
+      details: expect.objectContaining({ hitTested: true, hidesFooterContent: true })
+    })
+  ]));
+});
+
 test('does not report a normal sticky header as footer obstruction', async ({ page }) => {
   await page.setViewportSize({ width: 393, height: 852 });
   await page.setContent(`

@@ -56,7 +56,7 @@ export class ImageValidator {
           return { score: null, contrast: null, sampledWidth: 0, sampledHeight: 0, reason: 'Image is unavailable, vector, or animated.', source: 'rendered-dom' };
         }
 
-        const longestSide = 192;
+        const longestSide = 512;
         const scale = Math.min(1, longestSide / Math.max(image.naturalWidth, image.naturalHeight));
         const sampledWidth = Math.max(3, Math.round(image.naturalWidth * scale));
         const sampledHeight = Math.max(3, Math.round(image.naturalHeight * scale));
@@ -134,8 +134,9 @@ export class ImageValidator {
         const style = getComputedStyle(image);
         const source = image.currentSrc || image.src || image.getAttribute('src') || '';
         const isVector = /\.svg(?:$|[?#])/i.test(source) || /^data:image\/svg\+xml/i.test(source);
-        const scaleX = image.naturalWidth > 0 ? rect.width / image.naturalWidth : 0;
-        const scaleY = image.naturalHeight > 0 ? rect.height / image.naturalHeight : 0;
+        const deviceScale = Math.max(1, window.devicePixelRatio || 1);
+        const scaleX = image.naturalWidth > 0 ? rect.width * deviceScale / image.naturalWidth : 0;
+        const scaleY = image.naturalHeight > 0 ? rect.height * deviceScale / image.naturalHeight : 0;
         const upscaleRatio = Math.max(scaleX, scaleY);
         const sharpness = sharpnessFor(image);
         let visibleToUser =
@@ -171,6 +172,7 @@ export class ImageValidator {
           naturalHeight: image.naturalHeight,
           width: Number(rect.width.toFixed(2)),
           height: Number(rect.height.toFixed(2)),
+          deviceScale,
           top: Number(rect.top.toFixed(2)),
           left: Number(rect.left.toFixed(2)),
           right: Number(rect.right.toFixed(2)),
@@ -339,9 +341,9 @@ export class ImageValidator {
       if (image.isUpscaled) {
         addFinding(
           'Upscaled Image',
-          'Medium',
-          `The source image is at least as large as its ${image.width}x${image.height} CSS-pixel display size (within ${Math.round((upscaleTolerance - 1) * 100)}% tolerance).`,
-          `Natural size ${image.naturalWidth}x${image.naturalHeight}; displayed size ${image.width}x${image.height}; maximum upscale ${image.upscaleRatio}x.`,
+          'High',
+          `The source image provides enough pixels for its ${image.width}x${image.height} CSS-pixel display size at device pixel ratio ${image.deviceScale} (within ${Math.round((upscaleTolerance - 1) * 100)}% tolerance).`,
+          `Natural size ${image.naturalWidth}x${image.naturalHeight}; displayed size ${image.width}x${image.height} CSS px at ${image.deviceScale}x DPR; effective upscale ${image.upscaleRatio}x.`,
           'Serve a larger responsive source through srcset/sizes and avoid enlarging raster images beyond their natural dimensions.'
         );
       }
@@ -446,7 +448,7 @@ export class ImageValidator {
       const image = new Image();
       image.src = source;
       await image.decode();
-      const longestSide = 192;
+      const longestSide = 512;
       const scale = Math.min(1, longestSide / Math.max(image.naturalWidth, image.naturalHeight));
       const sampledWidth = Math.max(3, Math.round(image.naturalWidth * scale));
       const sampledHeight = Math.max(3, Math.round(image.naturalHeight * scale));

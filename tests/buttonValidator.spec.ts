@@ -126,9 +126,10 @@ test.describe('Button validator evidence', () => {
     expect(issues).toEqual(expect.arrayContaining([
       expect.objectContaining({
         description: 'Icon-only control has no rendered icon.',
+        severity: 'Low',
         details: expect.objectContaining({ backToTop: true })
       }),
-      expect.objectContaining({ description: 'Button has no visible or accessible label.' }),
+      expect.objectContaining({ description: 'Button has no visible or accessible label.', severity: 'Low' }),
       expect.objectContaining({
         description: 'Clickable button target is smaller than recommended touch size.',
         severity: 'Suggestion'
@@ -585,8 +586,8 @@ test.describe('Button validator evidence', () => {
       const selectors = targetSizeIssues.map((issue) => issue.selector);
 
       expect(visibilityIssues).toHaveLength(0);
-      expect(targetSizeIssues).toHaveLength(2);
-      expect(new Set(selectors).size).toBe(2);
+      expect(targetSizeIssues).toHaveLength(1);
+      expect(new Set(selectors).size).toBe(1);
       for (const selector of selectors) {
         const control = page.locator(selector ?? '');
         expect(await control.count()).toBe(1);
@@ -606,14 +607,22 @@ test.describe('Button validator evidence', () => {
     const issues = await new ButtonValidator().validate(page, 'https://example.com/', 'Desktop Full HD');
     const hiddenIssues = issues.filter((issue) => issue.description === 'Button is present but not visible.');
 
-    expect(hiddenIssues).toHaveLength(2);
-    expect(new Set(hiddenIssues.map((issue) => issue.selector)).size).toBe(2);
+    expect(hiddenIssues).toHaveLength(1);
+    expect(new Set(hiddenIssues.map((issue) => issue.selector)).size).toBe(1);
     expect(hiddenIssues).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ details: expect.objectContaining({ tagName: 'a' }) }),
         expect.objectContaining({ details: expect.objectContaining({ tagName: 'button' }) })
       ])
     );
+  });
+
+  test('does not treat a branded anchor or CTA link as a button', async ({ page }) => {
+    await page.setContent(`
+      <header><a class="light-logo" href="/" style="display:none">Site name</a></header>
+      <main><a class="btn-primary" href="/contact">Contact us</a></main>
+    `);
+    const issues = await new ButtonValidator().validate(page, 'https://example.com/', 'Desktop Full HD');
+    expect(issues.filter((issue) => issue.category === 'Buttons')).toHaveLength(0);
   });
 
   test('generates unique selectors for deeply nested buttons with duplicate ids', async ({ page }) => {
@@ -659,6 +668,7 @@ test.describe('Button validator evidence', () => {
     const issue = issues.find((candidate) => candidate.description === 'Button is present but not visible.');
 
     expect(issue).toBeDefined();
+    expect(issue?.severity).toBe('Low');
     expect(issue?.selector).toBe('div[aria-label="Hidden\\ search\\ action"]');
     expect(await page.locator(issue?.selector ?? '').count()).toBe(1);
     expect(issue?.actual).toContain('0 x 0px');

@@ -27,6 +27,7 @@ import { markNetworkNeverIdle } from '../utils/evidence';
 import { createIssue } from '../utils/issueFactory';
 import { isReportableIssue } from '../utils/reportFilters';
 import { detectAccessChallenge } from '../utils/accessChallenge';
+import { detectMisdirectedRequests } from '../audits/MisdirectedRequestAudit';
 import { EvidenceManager } from '../utils/evidence';
 import {
   AuditCheck,
@@ -150,6 +151,28 @@ test.describe('Automated website audit', () => {
           body: JSON.stringify(resolution, null, 2),
           contentType: 'application/json'
         });
+
+        const misdirectedIssues = await detectMisdirectedRequests(
+          page,
+          pageItem.url,
+          viewport,
+          signals,
+          pageItem.targetName,
+          pageItem.targetBaseUrl
+        );
+        if (misdirectedIssues.length > 0) {
+          const screenshot = await new EvidenceManager(page, pageItem.url, viewport, pageItem.targetName)
+            .captureAboveFold('http-421-misdirected-request')
+            .catch(() => null);
+          if (screenshot) {
+            screenshots.push(screenshot);
+            misdirectedIssues.forEach((issue) => {
+              issue.evidence = [screenshot.path];
+              issue.evidenceDetails = [screenshot];
+            });
+          }
+          issues.push(...misdirectedIssues);
+        }
 
         if (!response) {
           issues.push(

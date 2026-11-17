@@ -17,6 +17,14 @@ test('recognizes a visible copyright block immediately outside the semantic foot
   expect(issues.filter((issue) => issue.description.includes('copyright notice'))).toHaveLength(0);
 });
 
+test('recognizes a rendered class-based footer when semantic footer markup is absent', async ({ page }) => {
+  await page.setContent(`
+    <div class="site-footer"><nav><a href="/contact">Contact</a></nav><p>© 2026 Example. All rights reserved.</p></div>
+  `);
+  const issues = await new FooterValidator().validate(page, 'https://example.com/', 'Desktop');
+  expect(issues.filter((issue) => issue.description === 'Footer is not visible.')).toHaveLength(0);
+});
+
 test('reports a copyright notice when no visible copyright text exists', async ({ page }) => {
   await page.setContent(`
     <footer class="site-footer"><a href="/contact">Contact</a></footer>
